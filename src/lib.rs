@@ -1,12 +1,14 @@
-use near_sdk::borsh::maybestd::collections::{HashMap, HashSet};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
+use near_sdk::borsh::maybestd::collections::{HashMap, HashSet};
 use near_sdk::{
     env, near_bindgen, AccountId, Balance, Gas, PanicOnDefault, Promise, PublicKey, StorageUsage,
 };
 
-const USDT_CONTRACT_ID: &str = "usdt.testnet";  // TODO: update with testnet address
-const LENDING_CONTRACT_ID: &str = "gratis_protocol.testnet";  // TODO: update with testnet address
-const PRICE_ORACLE_CONTRACT_ID: &str = "price_oracle.testnet";  // TODO: update with testnet address
+use std::str::FromStr;
+
+const USDT_CONTRACT_ID: String = "usdt.testnet".to_string();  // TODO: update with testnet address
+const LENDING_CONTRACT_ID: String = "gratis_protocol.testnet".to_string();  // TODO: update with testnet address
+const PRICE_ORACLE_CONTRACT_ID: String = "price_oracle.testnet".to_string();  // TODO: update with testnet address
 const MIN_COLLATERAL_RATIO: u128 = 120;
 const LOWER_COLLATERAL_RATIO: u128 = 105;
 
@@ -33,6 +35,22 @@ impl LendingProtocol {
             loans: HashMap::new(),
             allowed_accounts: allowed_accounts.into_iter().collect(),
         }
+    }
+
+    fn get_usdt_value(&self, collateral: Balance) -> Promise {
+        // here we are assuming the collateral is in NEAR
+        let oracle_contract_id: AccountId = AccountId::from_str(&PRICE_ORACLE_CONTRACT_ID).unwrap();
+        let method_name: String = "get_price".to_string();
+        let args: Vec<u8> = serde_json::to_vec("NEAR").unwrap();  // Assuming the collateral is in NEAR
+        let gas: Gas = Gas(50_000_000_000_000);
+        let deposit: Balance = 0;
+
+        ext_price_oracle::get_price(
+            "NEAR".into(),
+            &oracle_contract_id,
+            0,
+            gas,
+        )
     }
 
     pub fn deposit_collateral(&mut self, mut amount: Balance) {
@@ -99,7 +117,7 @@ impl LendingProtocol {
             loan.collateral = 0;
         }
 
-        let mut promises= vec![Promise::new(USDT_CONTRACT_ID.to_string()).function_call(
+        let mut promises= vec![Promise::new(AccountId::from_str(&USDT_CONTRACT_ID).unwrap()).function_call(
             "ft_transfer_from".to_string(),
             format!(
                 r#"{{"sender_id": "{}", "receiver_id": "{}", "amount": "{}", "memo": "Repayment"}}"#,
@@ -123,6 +141,6 @@ impl LendingProtocol {
             promises.push(refund_promise);
         }
 
-        Promise::all(promises).return_promise();
+        near_sdk::PromiseOrValue::when_all(promises).unwrap();
     }
 }
