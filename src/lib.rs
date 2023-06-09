@@ -1,12 +1,12 @@
+use near_sdk::borsh::maybestd::collections::{HashMap, HashSet};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::{
-    env, near_bindgen, AccountId, Balance, PanicOnDefault, Promise, PublicKey, StorageUsage,
+    env, near_bindgen, AccountId, Balance, Gas, PanicOnDefault, Promise, PublicKey, StorageUsage,
 };
 
-near_sdk::setup_alloc!();
-
-const USDT_CONTRACT_ID: &str = "usdt.near";
-const PRICE_ORACLE_CONTRACT_ID: &str = "price_oracle.near";
+const USDT_CONTRACT_ID: &str = "usdt.testnet";  // TODO: update with testnet address
+const LENDING_CONTRACT_ID: &str = "gratis_protocol.testnet";  // TODO: update with testnet address
+const PRICE_ORACLE_CONTRACT_ID: &str = "price_oracle.testnet";  // TODO: update with testnet address
 const MIN_COLLATERAL_RATIO: u128 = 120;
 const LOWER_COLLATERAL_RATIO: u128 = 105;
 
@@ -26,15 +26,20 @@ pub struct Loan {
 
 impl LendingProtocol {
     pub fn new(allowed_accounts: Vec<AccountId>) -> Self {
+        assert!(env::state_read::<Self>().is_none(), "Contract is already initialized");
+        assert_eq!(env::predecessor_account_id(), env::current_account_id(), "Only contract owner can call this method");
+    
         Self {
             loans: HashMap::new(),
             allowed_accounts: allowed_accounts.into_iter().collect(),
         }
     }
 
-    pub fn deposit_collateral(&mut self, amount: Balance) {
+    pub fn deposit_collateral(&mut self, mut amount: Balance) {
         let fee = amount / 200; // 0.5% fee
         amount -= fee;
+
+        assert!(amount > 0, "Deposit Amount should be greater than 0");
 
         let account_id = env::signer_account_id();
         let loan = self.loans.entry(account_id.clone()).or_insert(Loan {
@@ -52,6 +57,8 @@ impl LendingProtocol {
     }
 
     pub fn borrow(&mut self, usdt_amount: Balance) {
+        assert!(usdt_amount > 0, "Borrow Amount should be greater than 0");
+
         let account_id = env::signer_account_id();
         let loan = self.loans.get_mut(&account_id).expect("No collateral deposited");
 
@@ -62,24 +69,22 @@ impl LendingProtocol {
 
         loan.borrowed += usdt_amount;
         Promise::new(account_id).function_call(
-            b"ft_transfer".to_vec(),
+            "ft_transfer".to_string(),
             format!(
                 r#"{{"receiver_id": "{}", "amount": "{}", "memo": "Borrowed USDT"}}"#,
                 account_id, usdt_amount
-            )
-            .as_bytes()
-            .to_vec(),
+            ).into_bytes(),
             0,
-            50_000_000_000_000,
+            Gas(50_000_000_000_000),
         );
     }
 
     // The "repay" method calculates the actual repayment amount and the refund amount based on the outstanding loan. If there's an overpayment, it will refund the excess amount to the user.
     pub fn repay(&mut self, usdt_amount: Balance) {
-        let fee = usdt_amount / 200; // 0.5% fee
+        let fee: u128 = usdt_amount / 200; // 0.5% fee
         usdt_amount -= fee;
 
-        let account_id = env::signer_account_id();
+        let account_id: AccountId = env::signer_account_id();
         let loan = self.loans.get_mut(&account_id).expect("No outstanding loan");
 
         let (repay_amount, refund_amount) = if loan.borrowed > usdt_amount {
@@ -95,28 +100,24 @@ impl LendingProtocol {
         }
 
         let mut promises= vec![Promise::new(USDT_CONTRACT_ID.to_string()).function_call(
-            b"ft_transfer_from".to_vec(),
+            "ft_transfer_from".to_string(),
             format!(
                 r#"{{"sender_id": "{}", "receiver_id": "{}", "amount": "{}", "memo": "Repayment"}}"#,
-                account_id, LENDING_CONTRACT_ID, repay_amount
-            )
-            .as_bytes()
-            .to_vec(),
+                account_id, LENDING_CONTRACT_ID.clone(), repay_amount
+            ).into_bytes(),
             0,
-            50_000_000_000_000,
+            Gas(50_000_000_000_000),
         )];
 
         if refund_amount > 0 {
             let refund_promise = Promise::new(account_id.clone()).function_call(
-                b"ft_transfer".to_vec(),
+                "ft_transfer".to_string(),
                 format!(
                     r#"{{"receiver_id": "{}", "amount": "{}", "memo": "Refund overpayment"}}"#,
                     account_id, refund_amount
-                )
-                .as_bytes()
-                .to_vec(),
+                ).into_bytes(),
                 0,
-                50_000_000_000_000,
+                Gas(50_000_000_000_000),
             );
 
             promises.push(refund_promise);

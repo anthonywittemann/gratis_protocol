@@ -3,6 +3,12 @@ name = "gratis_protocol"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "gratis_protocol"
+crate-type = ["cdylib"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+near-sdk = "4.0.0"
+borsh = "0.11.0"
