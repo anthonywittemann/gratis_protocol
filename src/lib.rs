@@ -130,6 +130,7 @@ impl LendingProtocol {
 
         let mut promises= vec![Promise::new(AccountId::from_str(&USDT_CONTRACT_ID).unwrap()).function_call(
             "ft_transfer_from".to_string(),
+            // TODO: replace LENDING_CONTRACT_ID with self.contract_id (if such functionality exists)
             format!(
                 r#"{{"sender_id": "{}", "receiver_id": "{}", "amount": "{}", "memo": "Repayment"}}"#,
                 account_id, LENDING_CONTRACT_ID.clone(), repay_amount
