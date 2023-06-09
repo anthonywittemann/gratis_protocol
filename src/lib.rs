@@ -38,7 +38,7 @@ impl LendingProtocol {
     }
 
     fn get_usdt_value(&self, collateral: Balance) -> Promise {
-        // here we are assuming the collateral is in NEAR
+        // here we are assuming the collateral is in NEAR - TODO allow for other collateral types
         let oracle_contract_id: AccountId = AccountId::from_str(&PRICE_ORACLE_CONTRACT_ID).unwrap();
         let method_name: String = "get_price".to_string();
         let args: Vec<u8> = serde_json::to_vec("NEAR").unwrap();  // Assuming the collateral is in NEAR
@@ -60,7 +60,7 @@ impl LendingProtocol {
         assert!(amount > 0, "Deposit Amount should be greater than 0");
 
         let account_id = env::signer_account_id();
-        let loan = self.loans.entry(account_id.clone()).or_insert(Loan {
+        let loan: &mut Loan = self.loans.entry(account_id.clone()).or_insert(Loan {
             collateral: 0,
             borrowed: 0,
             collateral_ratio: if self.allowed_accounts.contains(&account_id) {
@@ -76,21 +76,32 @@ impl LendingProtocol {
 
     pub fn borrow(&mut self, usdt_amount: Balance) {
         assert!(usdt_amount > 0, "Borrow Amount should be greater than 0");
+    
+        let signer_account_id: AccountId = env::signer_account_id();
+        let loan: &mut Loan = self.loans.get_mut(&signer_account_id).expect("No collateral deposited");
+    
+        // This Promise will eventually call `check_borrow` when the price is ready.
+        self.get_usdt_value(loan.collateral)
+            .then(ext_self::check_borrow(
+                usdt_amount,
+                loan.collateral_ratio,
+                &env::current_account_id(),
+                loan,
+            ));
+    }
 
-        let account_id = env::signer_account_id();
-        let loan = self.loans.get_mut(&account_id).expect("No collateral deposited");
-
-        let usdt_value = self.get_usdt_value(loan.collateral);
-        let min_usdt_value = (usdt_amount * loan.collateral_ratio) / 100;
+    fn check_borrow(&mut self, usdt_amount: Balance, price: Balance, collateral_ratio: u128, current_account_id: AccountId, loan: &mut Loan) {
+        let usdt_value: u128 = price * loan.collateral_ratio * loan.collateral / 100;
+        let min_usdt_value: u128 = (usdt_amount * loan.collateral_ratio) / 100;
 
         assert!(usdt_value >= min_usdt_value, "Insufficient collateral");
 
         loan.borrowed += usdt_amount;
-        Promise::new(account_id).function_call(
+        Promise::new(current_account_id).function_call(
             "ft_transfer".to_string(),
             format!(
                 r#"{{"receiver_id": "{}", "amount": "{}", "memo": "Borrowed USDT"}}"#,
-                account_id, usdt_amount
+                current_account_id, usdt_amount
             ).into_bytes(),
             0,
             Gas(50_000_000_000_000),
