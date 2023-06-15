@@ -5,10 +5,12 @@ use near_sdk::{
 
 use std::collections::{HashMap, HashSet};
 
+use crate::*;
+
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
-pub struct {
+pub struct Oracle {
     pub loans: HashMap<AccountId, Loan>,
     pub allowed_accounts: HashSet<AccountId>,
 }

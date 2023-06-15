@@ -9,11 +9,10 @@ use near_sdk::collections::UnorderedMap;
 use near_sdk::json_types::U128;
 use near_sdk::serde::{Deserialize, Serialize};
 
-pub mod util;
+// pub mod util;
+// use crate::util::*;
 
-pub use crate::util::{u128_dec_format, u64_dec_format, to_nano, unordered_map_pagination};
-
-pub type AssetId = String;
+type AssetId = String;
 pub type DurationSec = u32;
 
 
@@ -39,7 +38,7 @@ pub struct AssetOptionalPrice {
 #[cfg_attr(not(target_arch = "wasm32"), derive(Debug))]
 #[serde(crate = "near_sdk::serde")]
 pub struct Price {
-    #[serde(with = "u128_dec_format")]
+    // #[serde(with = "u128_dec_format")]
     pub multiplier: Balance,
     pub decimals: u8,
 }
@@ -47,7 +46,7 @@ pub struct Price {
 #[derive(Serialize, Deserialize)]
 #[serde(crate = "near_sdk::serde")]
 pub struct PriceData {
-    #[serde(with = "u64_dec_format")]
+    // #[serde(with = "u64_dec_format")]
     pub timestamp: Timestamp,
     pub recency_duration_sec: DurationSec,
 
