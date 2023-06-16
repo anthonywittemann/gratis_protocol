@@ -10,23 +10,25 @@ pub mod oracle;
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::borsh::maybestd::collections::{HashMap, HashSet};
 use near_sdk::{
-    env, near_bindgen, AccountId, Balance, Gas, PanicOnDefault, Promise, PublicKey, StorageUsage,
+    env, near_bindgen, AccountId, Balance, Gas, PanicOnDefault, Promise, 
+    PublicKey, StorageUsage, PromiseError, log
 };
 
 use std::str::FromStr;
 
 const USDT_CONTRACT_ID: &str = "usdt.testnet";  // TODO: update with testnet address
 const LENDING_CONTRACT_ID: &str = "gratis_protocol.testnet"; // TODO: update with testnet address
-const PRICE_ORACLE_CONTRACT_ID: &str = "price_oracle.testnet";
+const PRICE_ORACLE_CONTRACT_ID: &str = "priceoracle.testnet";
 const MIN_COLLATERAL_RATIO: u128 = 120;
 const LOWER_COLLATERAL_RATIO: u128 = 105;
 
 #[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, PanicOnDefault)]
 pub struct LendingProtocol {
     pub loans: HashMap<AccountId, Loan>,
     pub allowed_accounts: HashSet<AccountId>,
     pub oracle_id: AccountId,
+    pub price_data:  Option<PriceData>,
 }
 
 #[derive(BorshDeserialize, BorshSerialize)]
@@ -36,7 +38,9 @@ pub struct Loan {
     pub collateral_ratio: u128,
 }
 
+#[near_bindgen]
 impl LendingProtocol {
+
     pub fn new(allowed_accounts: Vec<AccountId>) -> Self {
         assert!(env::state_read::<Self>().is_none(), "Contract is already initialized");
         assert_eq!(env::predecessor_account_id(), env::current_account_id(), "Only contract owner can call this method");
@@ -45,31 +49,39 @@ impl LendingProtocol {
             loans: HashMap::new(),
             allowed_accounts: allowed_accounts.into_iter().collect(),
             oracle_id: AccountId::from_str(&PRICE_ORACLE_CONTRACT_ID).unwrap(),
+            price_data: None,
         }
     }
 
     fn get_usdt_value(&self, collateral: Balance) -> Promise {
-        // here we are assuming the collateral is in NEAR - TODO allow for other collateral types
-        // let oracle_contract_id: AccountId = AccountId::from_str(&PRICE_ORACLE_CONTRACT_ID).unwrap();
-        // let method_name: String = "get_price".to_string();
-        // let args: Vec<u8> = serde_json::to_vec("NEAR").unwrap();  // Assuming the collateral is in NEAR
         let gas: Gas = Gas(50_000_000_000_000);
-        let deposit: Balance = 0;
-
-
-        let promise = ext_price_oracle::ext(self.oracle_id.clone())
-        .with_static_gas(gas)
-        .get_price_data(Some(vec!["NEAR".to_string()]));
-
-        return promise;
-
-        // ext_price_oracle::get_price(
-        //     "NEAR".into(),
-        //     &oracle_contract_id,
-        //     0,
-        //     gas,
-        // )
+    
+        ext_price_oracle::ext(self.oracle_id.clone())
+            .with_static_gas(gas)
+            .get_price_data(Some(vec!["usdt.fakes.testnet".to_string()]))
+            .then(
+                Self::ext(env::current_account_id()).get_usdt_callback(),
+            )
     }
+    
+    #[private] 
+    pub fn get_usdt_callback(&mut self, #[callback] call_result: Result<PriceData, PromiseError>) -> PriceData {
+        match call_result {
+            Ok(data) => {
+                self.price_data = Some(data.clone());
+                return data;
+            }
+            Err(err) => {
+                log!("PromiseError occurred: {:?}", err);
+                panic!("Failed to fetch price data."); // or however you want to handle this failure
+            }
+        }
+    }
+
+    pub fn get_latest_price(&self) -> PriceData {
+        return self.price_data.clone().unwrap();
+    }
+
 
     // pub fn deposit_collateral(&mut self, mut amount: Balance) {
     //     let fee = amount / 200; // 0.5% fee
@@ -174,4 +186,42 @@ impl LendingProtocol {
 
     //     near_sdk::PromiseOrValue::when_all(promises).unwrap();
     // }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use near_sdk::{
+        borsh::{self, BorshSerialize},
+        near_bindgen,
+        test_utils::VMContextBuilder,
+        testing_env, AccountId, BorshStorageKey, Promise, PromiseOrValue, StorageUsage,
+    };
+
+    #[test]
+    pub fn initialize() {
+        let a: AccountId = "alice.near".parse().unwrap();
+        // let v: Vec<AccountId> = vec![a.clone()];
+        testing_env!(VMContextBuilder::new().predecessor_account_id(a.clone()).build());
+        let contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
+        assert_eq!(contract.oracle_id, "priceoracle.testnet".parse().unwrap())
+    }
+
+    #[test]
+    pub fn test_get_usdt() {
+        let a: AccountId = "alice.near".parse().unwrap();
+        // let v: Vec<AccountId> = vec![a.clone()];
+        testing_env!(VMContextBuilder::new().predecessor_account_id(a.clone()).build());
+        let contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
+        let usdt_amount: Balance = 100;
+        let p = contract.get_usdt_value(usdt_amount);
+        // let otherp: Promise = Promise::new(a.clone());
+        println!("{:?}", contract.price_data.unwrap().timestamp.to_string());
+        // println!("{:?}", p.timestamp);
+        // assert_eq!(p, otherp);
+
+        // assert_eq!(contract.oracle_id, "price_oracle.testnet".parse().unwrap())  
+    }
 }

@@ -27,7 +27,7 @@ pub struct AssetPrice {
     pub price: Price,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone)]
 #[serde(crate = "near_sdk::serde")]
 pub struct AssetOptionalPrice {
     pub asset_id: AssetId,
@@ -43,7 +43,7 @@ pub struct Price {
     pub decimals: u8,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone)]
 #[serde(crate = "near_sdk::serde")]
 pub struct PriceData {
     // #[serde(with = "u64_dec_format")]
