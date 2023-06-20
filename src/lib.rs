@@ -13,6 +13,8 @@ use near_sdk::{
     env, near_bindgen, AccountId, Balance, Gas, PanicOnDefault, Promise, 
     PublicKey, StorageUsage, PromiseError, log
 };
+use near_sdk::serde::{Deserialize, Serialize};
+
 
 use std::str::FromStr;
 
@@ -24,6 +26,7 @@ const LOWER_COLLATERAL_RATIO: u128 = 105;
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, PanicOnDefault)]
+#[serde(crate = "near_sdk::serde")]
 pub struct LendingProtocol {
     pub loans: HashMap<AccountId, Loan>,
     pub allowed_accounts: HashSet<AccountId>,
@@ -31,7 +34,8 @@ pub struct LendingProtocol {
     pub price_data:  Option<PriceData>,
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize)]
+#[serde(crate = "near_sdk::serde")]
 pub struct Loan {
     pub collateral: Balance,
     pub borrowed: Balance,
@@ -65,7 +69,7 @@ impl LendingProtocol {
     }
     
     #[private] 
-    pub fn get_usdt_callback(&mut self, #[callback] call_result: Result<PriceData, PromiseError>) -> PriceData {
+    pub fn get_usdt_callback(&mut self, #[callback] call_result: Result<PriceData, String>) -> PriceData {
         match call_result {
             Ok(data) => {
                 self.price_data = Some(data.clone());
@@ -200,6 +204,26 @@ mod tests {
         testing_env, AccountId, BorshStorageKey, Promise, PromiseOrValue, StorageUsage,
     };
 
+    fn get_context(input: Vec<u8>, is_view: bool) -> VMContext {
+        VMContext {
+            current_account_id: "alice.testnet".to_string(),
+            signer_account_id: "bob.testnet".to_string(),
+            predecessor_account_id: "carol.testnet".to_string(),
+            input,
+            block_index: 0,
+            block_timestamp: 0,
+            account_balance: 0,
+            account_locked_balance: 0,
+            storage_usage: 0,
+            attached_deposit: 0,
+            prepaid_gas: 10u64.pow(18),
+            random_seed: vec![0, 1, 2],
+            is_view,
+            output_data_receivers: vec![],
+            epoch_height: 0,
+        }
+    }
+
     #[test]
     pub fn initialize() {
         let a: AccountId = "alice.near".parse().unwrap();
@@ -213,12 +237,22 @@ mod tests {
     pub fn test_get_usdt() {
         let a: AccountId = "alice.near".parse().unwrap();
         // let v: Vec<AccountId> = vec![a.clone()];
-        testing_env!(VMContextBuilder::new().predecessor_account_id(a.clone()).build());
+        // testing_env!(VMContextBuilder::new().predecessor_account_id(a.clone()).build());
+
+        let mut context = get_context(vec![], false);
+        testing_env!(context.clone());
+
         let contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
         let usdt_amount: Balance = 100;
         let p = contract.get_usdt_value(usdt_amount);
+        context.input = p;  // Replace this with actual promise output
+        testing_env!(context.clone());
+        let result = contract.get_usdt_callback();  // Replace with actual callback method
+        println!("{:?}", result.prices.first().unwrap().price);
+
+        // assert_eq!(result.prices.into(), 100);
         // let otherp: Promise = Promise::new(a.clone());
-        println!("{:?}", contract.price_data.unwrap().timestamp.to_string());
+        // println!("{:?}", contract.price_data.unwrap().timestamp.to_string());
         // println!("{:?}", p.timestamp);
         // assert_eq!(p, otherp);
 
