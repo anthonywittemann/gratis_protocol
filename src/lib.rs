@@ -165,7 +165,7 @@ impl LendingProtocol {
         println!("current_account_id: {}", env::current_account_id());
 
         // If max borrowable amount is greater than the requested amount, then borrow the requested amount
-        if (BigDecimal::from(usdt_amount) <= max_borrowable_amount) {
+        if BigDecimal::from(usdt_amount) <= max_borrowable_amount {
             // TODO: borrow the requested amount
             loan.borrowed += usdt_amount;
             Promise::new(env::current_account_id()).function_call(
@@ -212,7 +212,7 @@ impl LendingProtocol {
         let borrowed_value: Balance = loan.borrowed;
 
         // If max borrowable amount is greater than the requested amount, then borrow the requested amount
-        if (usdt_amount <= borrowed_value) {
+        if usdt_amount <= borrowed_value {
             // TODO: borrow the requested amount
             loan.borrowed -= usdt_amount;
             Promise::new(env::current_account_id()).function_call(
