@@ -1,21 +1,23 @@
-use near_sdk::{ext_contract};
+use near_sdk::ext_contract;
 
+pub mod big_decimal;
 pub mod external;
 pub mod oracle;
+
+use crate::big_decimal::*;
 use crate::external::*;
 
-use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::borsh::maybestd::collections::{HashMap, HashSet};
-use near_sdk::{
-    env, near_bindgen, AccountId, Balance, Gas, PanicOnDefault, Promise, 
-    PublicKey, StorageUsage, PromiseError, log
-};
+use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Deserialize, Serialize};
-
+use near_sdk::{
+    env, log, near_bindgen, AccountId, Balance, Gas, PanicOnDefault, Promise, PromiseError,
+    PublicKey, StorageUsage,
+};
 
 use std::str::FromStr;
 
-const USDT_CONTRACT_ID: &str = "usdt.testnet";  // TODO: update with testnet address
+const USDT_CONTRACT_ID: &str = "usdt.testnet"; // TODO: update with testnet address
 const LENDING_CONTRACT_ID: &str = "gratis_protocol.testnet"; // TODO: update with testnet address
 const PRICE_ORACLE_CONTRACT_ID: &str = "priceoracle.testnet";
 const MIN_COLLATERAL_RATIO: u128 = 120;
@@ -28,24 +30,30 @@ pub struct LendingProtocol {
     pub loans: HashMap<AccountId, Loan>,
     pub lower_collateral_accounts: HashSet<AccountId>,
     pub oracle_id: AccountId,
-    pub price_data:  Option<PriceData>,
+    pub price_data: Option<PriceData>,
 }
 
 #[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize)]
 #[serde(crate = "near_sdk::serde")]
 pub struct Loan {
-    pub collateral: Balance,  // NOTE: this only works with NEAR as collateral currency
+    pub collateral: Balance, // NOTE: this only works with NEAR as collateral currency
     pub borrowed: Balance,
-    pub collateral_ratio: u128,
+    pub collateral_ratio: BigDecimal,
 }
 
 #[near_bindgen]
 impl LendingProtocol {
-
     pub fn new(lower_collateral_accounts: Vec<AccountId>) -> Self {
-        assert!(env::state_read::<Self>().is_none(), "Contract is already initialized");
-        assert_eq!(env::predecessor_account_id(), env::current_account_id(), "Only contract owner can call this method");
-    
+        assert!(
+            env::state_read::<Self>().is_none(),
+            "Contract is already initialized"
+        );
+        assert_eq!(
+            env::predecessor_account_id(),
+            env::current_account_id(),
+            "Only contract owner can call this method"
+        );
+
         Self {
             loans: HashMap::new(),
             lower_collateral_accounts: lower_collateral_accounts.into_iter().collect(),
@@ -56,17 +64,18 @@ impl LendingProtocol {
 
     fn get_usdt_value(&self, collateral: Balance) -> Promise {
         let gas: Gas = Gas(50_000_000_000_000);
-    
+
         ext_price_oracle::ext(self.oracle_id.clone())
             .with_static_gas(gas)
             .get_price_data(Some(vec!["usdt.fakes.testnet".to_string()]))
-            .then(
-                Self::ext(env::current_account_id()).get_usdt_callback(),
-            )
+            .then(Self::ext(env::current_account_id()).get_usdt_callback())
     }
-    
-    #[private] 
-    pub fn get_usdt_callback(&mut self, #[callback] call_result: Result<PriceData, String>) -> PriceData {
+
+    #[private]
+    pub fn get_usdt_callback(
+        &mut self,
+        #[callback] call_result: Result<PriceData, String>,
+    ) -> PriceData {
         match call_result {
             Ok(data) => {
                 self.price_data = Some(data.clone());
@@ -83,7 +92,6 @@ impl LendingProtocol {
         return self.price_data.clone().unwrap();
     }
 
-
     pub fn deposit_collateral(&mut self, mut amount: Balance) {
         let fee = amount / 200; // 0.5% fee
         amount -= fee;
@@ -95,9 +103,9 @@ impl LendingProtocol {
             collateral: 0,
             borrowed: 0,
             collateral_ratio: if self.lower_collateral_accounts.contains(&account_id) {
-                LOWER_COLLATERAL_RATIO
+                BigDecimal::from(LOWER_COLLATERAL_RATIO)
             } else {
-                MIN_COLLATERAL_RATIO
+                BigDecimal::from(MIN_COLLATERAL_RATIO)
             },
         });
 
@@ -107,30 +115,52 @@ impl LendingProtocol {
 
     pub fn borrow(&mut self, usdt_amount: Balance) {
         assert!(usdt_amount > 0, "Borrow Amount should be greater than 0");
-    
+
         let signer_account_id: AccountId = env::signer_account_id();
-        let loan: &mut Loan = self.loans.get_mut(&signer_account_id).expect("No collateral deposited");
-    
-        // get the usdt price of the collateral asset
+
         let price = self.get_latest_price().prices[0].price.unwrap();
 
-        // TODO convert price to uint or float to multiply
-        let usdt_value: u128 = price * loan.collateral_ratio * loan.collateral / 100;
-        let min_usdt_value: u128 = (usdt_amount * loan.collateral_ratio) / 100;
+        let loan: &mut Loan = self
+            .loans
+            .get_mut(&signer_account_id)
+            .expect("No collateral deposited");
 
-        assert!(usdt_value >= min_usdt_value, "Insufficient collateral");
+        // get the latest price NEAR in USDT of the collateral asset
 
-        loan.borrowed += usdt_amount;
-        Promise::new(current_account_id).function_call(
-            "ft_transfer".to_string(),
-            format!(
-                r#"{{"receiver_id": "{}", "amount": "{}", "memo": "Borrowed USDT"}}"#,
-                current_account_id, usdt_amount
-            ).into_bytes(),
-            0,
-            Gas(50_000_000_000_000),
-        );
-        
+        // Calculate collateral and borrowed value
+        let collateral_value: BigDecimal =
+            BigDecimal::from_balance_price(loan.collateral, &price, 0);
+        let borrowed_value: Balance = loan.borrowed;
+
+        // get max borrowable amount
+        let max_borrowable_amount =
+            collateral_value / loan.collateral_ratio - BigDecimal::from(borrowed_value);
+
+        // If max borrowable amount is greater than the requested amount, then borrow the requested amount
+        if (BigDecimal::from(usdt_amount) <= max_borrowable_amount) {
+            // TODO: borrow the requested amount
+            loan.borrowed += usdt_amount;
+            Promise::new(env::current_account_id()).function_call(
+                "ft_transfer".to_string(),
+                format!(
+                    r#"{{"receiver_id": "{}", "amount": "{}", "memo": "Borrowed USDT"}}"#,
+                    env::current_account_id(),
+                    usdt_amount
+                )
+                .into_bytes(),
+                0,
+                Gas(50_000_000_000_000),
+            );
+        } else {
+            assert_eq!(false, true, "Insufficient collateral");
+        }
+        /*
+           1. Calculate the collateral value
+           1a. Calculate current loan value
+           2. Calculate max borrowable amount
+           3. Check if the max borrowable amount is greater than the requested amount
+           4. If yes, then borrow the requested amount
+        */
     }
 
     // // The "repay" method calculates the actual repayment amount and the refund amount based on the outstanding loan. If there's an overpayment, it will refund the excess amount to the user.
@@ -182,7 +212,6 @@ impl LendingProtocol {
     // }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,31 +223,13 @@ mod tests {
         testing_env, AccountId, BorshStorageKey, Promise, PromiseOrValue, StorageUsage,
     };
 
-    fn get_context(input: Vec<u8>, is_view: bool) -> VMContext {
-        VMContext {
-            current_account_id: "alice.testnet".to_string(),
-            signer_account_id: "bob.testnet".to_string(),
-            predecessor_account_id: "carol.testnet".to_string(),
-            input,
-            block_index: 0,
-            block_timestamp: 0,
-            account_balance: 0,
-            account_locked_balance: 0,
-            storage_usage: 0,
-            attached_deposit: 0,
-            prepaid_gas: 10u64.pow(18),
-            random_seed: vec![0, 1, 2],
-            is_view,
-            output_data_receivers: vec![],
-            epoch_height: 0,
-        }
-    }
-
     #[test]
     pub fn initialize() {
         let a: AccountId = "alice.near".parse().unwrap();
         // let v: Vec<AccountId> = vec![a.clone()];
-        testing_env!(VMContextBuilder::new().predecessor_account_id(a.clone()).build());
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(a.clone())
+            .build());
         let contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
         assert_eq!(contract.oracle_id, "priceoracle.testnet".parse().unwrap())
     }
@@ -226,19 +237,16 @@ mod tests {
     #[test]
     pub fn test_get_usdt() {
         let a: AccountId = "alice.near".parse().unwrap();
-        // let v: Vec<AccountId> = vec![a.clone()];
-        // testing_env!(VMContextBuilder::new().predecessor_account_id(a.clone()).build());
-
-        let mut context = get_context(vec![], false);
-        testing_env!(context.clone());
+        let v: Vec<AccountId> = vec![a.clone()];
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(a.clone())
+            .build());
 
         let contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
         let usdt_amount: Balance = 100;
         let p = contract.get_usdt_value(usdt_amount);
-        context.input = p;  // Replace this with actual promise output
-        testing_env!(context.clone());
-        let result = contract.get_usdt_callback();  // Replace with actual callback method
-        println!("{:?}", result.prices.first().unwrap().price);
+        // let result = contract.get_usdt_callback(); // Replace with actual callback method
+        // println!("{:?}", result.prices.first().unwrap().price);
 
         // assert_eq!(result.prices.into(), 100);
         // let otherp: Promise = Promise::new(a.clone());
@@ -246,6 +254,6 @@ mod tests {
         // println!("{:?}", p.timestamp);
         // assert_eq!(p, otherp);
 
-        // assert_eq!(contract.oracle_id, "price_oracle.testnet".parse().unwrap())  
+        // assert_eq!(contract.oracle_id, "price_oracle.testnet".parse().unwrap())
     }
 }
