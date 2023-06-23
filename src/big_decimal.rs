@@ -63,16 +63,16 @@ impl FromStr for BigDecimal {
         let dot_pos = s.find('.');
         let (int, dec) = (s, 0u128);
 
-        // if let Some(dot_pos) = dot_pos {
-        //     (
-        //         &s[..dot_pos],
-        //         format!("{:0<27}", &s[dot_pos + 1..])
-        //             .parse()
-        //             .map_err(|_| PARSE_INT_ERROR)?,
-        //     )
-        // } else {
-        //     (s, 0u128)
-        // };
+        if let Some(dot_pos) = dot_pos {
+            (
+                &s[..dot_pos],
+                format!("{:0<27}", &s[dot_pos + 1..])
+                    .parse()
+                    .map_err(|_| PARSE_INT_ERROR)?,
+            )
+        } else {
+            (s, 0u128)
+        };
         let int = U384::from_str(&int).map_err(|_| PARSE_INT_ERROR)?;
         if dec >= BIG_DIVISOR {
             return Err(String::from("The decimal part is too large"));
