@@ -33,7 +33,7 @@ pub struct LendingProtocol {
     pub price_data: Option<PriceData>,
 }
 
-#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize)]
+#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone, Copy)]
 #[serde(crate = "near_sdk::serde")]
 pub struct Loan {
     pub collateral: Balance, // NOTE: this only works with NEAR as collateral currency
@@ -58,8 +58,12 @@ impl LendingProtocol {
             loans: HashMap::new(),
             lower_collateral_accounts: lower_collateral_accounts.into_iter().collect(),
             oracle_id: AccountId::from_str(&PRICE_ORACLE_CONTRACT_ID).unwrap(),
-            price_data: None,
+            price_data: Some(PriceData::default()),
         }
+    }
+
+    pub fn get_all_loans(&self) -> HashMap<AccountId, Loan> {
+        return self.loans.clone();
     }
 
     fn get_usdt_value(&self, collateral: Balance) -> Promise {
@@ -118,6 +122,8 @@ impl LendingProtocol {
 
         let signer_account_id: AccountId = env::signer_account_id();
 
+        println!("signer_account_id: {}", signer_account_id);
+
         let price = self.get_latest_price().prices[0].price.unwrap();
 
         let loan: &mut Loan = self
@@ -132,9 +138,23 @@ impl LendingProtocol {
             BigDecimal::from_balance_price(loan.collateral, &price, 0);
         let borrowed_value: Balance = loan.borrowed;
 
+        println!("collateral_value: {}", collateral_value);
+        println!("borrowed_value: {}", borrowed_value);
+
+        println!("collateral_ratio: {}", loan.collateral_ratio);
+
+        // 0.000000000000000000014925
+        // 0.000000000000000000000124375
+
         // get max borrowable amount
-        let max_borrowable_amount =
-            collateral_value / loan.collateral_ratio - BigDecimal::from(borrowed_value);
+        let max_borrowable_amount = BigDecimal::from(100u128)
+            * (collateral_value / loan.collateral_ratio)
+            - BigDecimal::from(borrowed_value);
+
+        println!("max_borrowable_amount: {}", max_borrowable_amount);
+        println!("usdt_amount: {}", usdt_amount);
+
+        println!("current_account_id: {}", env::current_account_id());
 
         // If max borrowable amount is greater than the requested amount, then borrow the requested amount
         if (BigDecimal::from(usdt_amount) <= max_borrowable_amount) {
@@ -255,5 +275,31 @@ mod tests {
         // assert_eq!(p, otherp);
 
         // assert_eq!(contract.oracle_id, "price_oracle.testnet".parse().unwrap())
+    }
+
+    #[test]
+    pub fn test_borrow() {
+        let a: AccountId = "alice.near".parse().unwrap();
+        let bob: AccountId = "bob.near".parse().unwrap();
+        let v: Vec<AccountId> = vec![a.clone()];
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(a.clone())
+            .signer_account_id(a.clone())
+            .build());
+
+        let mut contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
+        let usdt_amount: Balance = 10000;
+        let borrow_amount: Balance = 50;
+
+        contract.deposit_collateral(usdt_amount);
+        contract.borrow(borrow_amount);
+
+        let loans = contract.get_all_loans();
+        for (key, value) in &loans {
+            println!("Loan: {}: {}", key, value.borrowed);
+        }
+
+        let loan = contract.loans.get(&a).unwrap();
+        assert_eq!(loan.borrowed, borrow_amount);
     }
 }

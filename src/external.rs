@@ -1,18 +1,17 @@
 use crate::*;
 
-use near_sdk::{ext_contract};
-use near_sdk::{Timestamp};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::UnorderedMap;
+use near_sdk::ext_contract;
 use near_sdk::json_types::U128;
 use near_sdk::serde::{Deserialize, Serialize};
+use near_sdk::Timestamp;
 
 // pub mod util;
 // use crate::util::*;
 
 type AssetId = String;
 pub type DurationSec = u32;
-
 
 pub const TGAS: u64 = 1_000_000_000_000;
 pub const NO_DEPOSIT: u128 = 0;
@@ -51,6 +50,21 @@ pub struct PriceData {
     pub prices: Vec<AssetOptionalPrice>,
 }
 
+impl Default for PriceData {
+    fn default() -> Self {
+        Self {
+            timestamp: 1,            // default value for timestamp
+            recency_duration_sec: 1, // default value for recency_duration_sec
+            prices: vec![AssetOptionalPrice {
+                asset_id: "wrap.testnet".to_string(),
+                price: Some(Price {
+                    multiplier: 15000, // default value for multiplier
+                    decimals: 6,       // default value for decimals
+                }),
+            }], // default value for prices
+        }
+    }
+}
 
 // Validator interface, for cross-contract calls
 #[ext_contract(ext_price_oracle)]
