@@ -1,11 +1,8 @@
-
-
 use near_sdk::{ext_contract};
 
 pub mod external;
-use crate::external::*;
-
 pub mod oracle;
+use crate::external::*;
 
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::borsh::maybestd::collections::{HashMap, HashSet};
@@ -29,7 +26,7 @@ const LOWER_COLLATERAL_RATIO: u128 = 105;
 #[serde(crate = "near_sdk::serde")]
 pub struct LendingProtocol {
     pub loans: HashMap<AccountId, Loan>,
-    pub allowed_accounts: HashSet<AccountId>,
+    pub lower_collateral_accounts: HashSet<AccountId>,
     pub oracle_id: AccountId,
     pub price_data:  Option<PriceData>,
 }
@@ -37,7 +34,7 @@ pub struct LendingProtocol {
 #[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize)]
 #[serde(crate = "near_sdk::serde")]
 pub struct Loan {
-    pub collateral: Balance,
+    pub collateral: Balance,  // NOTE: this only works with NEAR as collateral currency
     pub borrowed: Balance,
     pub collateral_ratio: u128,
 }
@@ -45,13 +42,13 @@ pub struct Loan {
 #[near_bindgen]
 impl LendingProtocol {
 
-    pub fn new(allowed_accounts: Vec<AccountId>) -> Self {
+    pub fn new(lower_collateral_accounts: Vec<AccountId>) -> Self {
         assert!(env::state_read::<Self>().is_none(), "Contract is already initialized");
         assert_eq!(env::predecessor_account_id(), env::current_account_id(), "Only contract owner can call this method");
     
         Self {
             loans: HashMap::new(),
-            allowed_accounts: allowed_accounts.into_iter().collect(),
+            lower_collateral_accounts: lower_collateral_accounts.into_iter().collect(),
             oracle_id: AccountId::from_str(&PRICE_ORACLE_CONTRACT_ID).unwrap(),
             price_data: None,
         }
@@ -87,61 +84,54 @@ impl LendingProtocol {
     }
 
 
-    // pub fn deposit_collateral(&mut self, mut amount: Balance) {
-    //     let fee = amount / 200; // 0.5% fee
-    //     amount -= fee;
+    pub fn deposit_collateral(&mut self, mut amount: Balance) {
+        let fee = amount / 200; // 0.5% fee
+        amount -= fee;
 
-    //     assert!(amount > 0, "Deposit Amount should be greater than 0");
+        assert!(amount > 0, "Deposit Amount should be greater than 0");
 
-    //     let account_id = env::signer_account_id();
-    //     let loan: &mut Loan = self.loans.entry(account_id.clone()).or_insert(Loan {
-    //         collateral: 0,
-    //         borrowed: 0,
-    //         collateral_ratio: if self.allowed_accounts.contains(&account_id) {
-    //             LOWER_COLLATERAL_RATIO
-    //         } else {
-    //             MIN_COLLATERAL_RATIO
-    //         },
-    //     });
+        let account_id = env::signer_account_id();
+        let loan: &mut Loan = self.loans.entry(account_id.clone()).or_insert(Loan {
+            collateral: 0,
+            borrowed: 0,
+            collateral_ratio: if self.lower_collateral_accounts.contains(&account_id) {
+                LOWER_COLLATERAL_RATIO
+            } else {
+                MIN_COLLATERAL_RATIO
+            },
+        });
 
-    //     loan.collateral += amount;
-    //     Promise::new(account_id).transfer(amount);
-    // }
+        loan.collateral += amount;
+        Promise::new(account_id).transfer(amount);
+    }
 
-    // pub fn borrow(&mut self, usdt_amount: Balance) {
-    //     assert!(usdt_amount > 0, "Borrow Amount should be greater than 0");
+    pub fn borrow(&mut self, usdt_amount: Balance) {
+        assert!(usdt_amount > 0, "Borrow Amount should be greater than 0");
     
-    //     let signer_account_id: AccountId = env::signer_account_id();
-    //     let loan: &mut Loan = self.loans.get_mut(&signer_account_id).expect("No collateral deposited");
+        let signer_account_id: AccountId = env::signer_account_id();
+        let loan: &mut Loan = self.loans.get_mut(&signer_account_id).expect("No collateral deposited");
     
-    //     // This Promise will eventually call `check_borrow` when the price is ready.
-    //     self.get_usdt_value(loan.collateral)
-    //         .then(ext_self::check_borrow(
-    //             usdt_amount,
-    //             loan.collateral_ratio,
-    //             &env::current_account_id(),
-    //             loan,
-    //         ));
+        // get the usdt price of the collateral asset
+        let price = self.get_latest_price().prices[0].price.unwrap();
+
+        // TODO convert price to uint or float to multiply
+        let usdt_value: u128 = price * loan.collateral_ratio * loan.collateral / 100;
+        let min_usdt_value: u128 = (usdt_amount * loan.collateral_ratio) / 100;
+
+        assert!(usdt_value >= min_usdt_value, "Insufficient collateral");
+
+        loan.borrowed += usdt_amount;
+        Promise::new(current_account_id).function_call(
+            "ft_transfer".to_string(),
+            format!(
+                r#"{{"receiver_id": "{}", "amount": "{}", "memo": "Borrowed USDT"}}"#,
+                current_account_id, usdt_amount
+            ).into_bytes(),
+            0,
+            Gas(50_000_000_000_000),
+        );
         
-    // }
-
-    // fn check_borrow(&mut self, usdt_amount: Balance, price: Balance, collateral_ratio: u128, current_account_id: AccountId, loan: &mut Loan) {
-    //     let usdt_value: u128 = price * loan.collateral_ratio * loan.collateral / 100;
-    //     let min_usdt_value: u128 = (usdt_amount * loan.collateral_ratio) / 100;
-
-    //     assert!(usdt_value >= min_usdt_value, "Insufficient collateral");
-
-    //     loan.borrowed += usdt_amount;
-    //     Promise::new(current_account_id).function_call(
-    //         "ft_transfer".to_string(),
-    //         format!(
-    //             r#"{{"receiver_id": "{}", "amount": "{}", "memo": "Borrowed USDT"}}"#,
-    //             current_account_id, usdt_amount
-    //         ).into_bytes(),
-    //         0,
-    //         Gas(50_000_000_000_000),
-    //     );
-    // }
+    }
 
     // // The "repay" method calculates the actual repayment amount and the refund amount based on the outstanding loan. If there's an overpayment, it will refund the excess amount to the user.
     // pub fn repay(&mut self, usdt_amount: Balance) {
