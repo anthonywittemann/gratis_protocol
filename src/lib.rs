@@ -142,8 +142,9 @@ impl LendingProtocol {
 
         // Calculate collateral and borrowed value
         // TODO convert to u128
-        let collateral_value: u128 =
-            BigDecimal::from_balance_price(loan.collateral, &price, 0);
+        let collateral_value: u128 = BigDecimal::round_u128(
+            &BigDecimal::from_balance_price(loan.collateral, &price, 0)
+        );
         let borrowed_value: Balance = loan.borrowed;
 
         println!("collateral_value: {}", collateral_value);
@@ -204,8 +205,9 @@ impl LendingProtocol {
 
         // Calculate collateral and borrowed value
         // TODO convert to u128
-        let collateral_value: u128 =
-            BigDecimal::from_balance_price(loan.collateral, &price, 0);
+        let collateral_value: u128 = BigDecimal::round_u128(
+            &BigDecimal::from_balance_price(loan.collateral, &price, 0)
+        );
         let borrowed_value: Balance = loan.borrowed;
 
         // If max borrowable amount is greater than the requested amount, then borrow the requested amount
