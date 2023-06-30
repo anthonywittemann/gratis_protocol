@@ -6,9 +6,6 @@ use near_sdk::json_types::U128;
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::Timestamp;
 
-// pub mod util;
-// use crate::util::*;
-
 type AssetId = String;
 pub type DurationSec = u32;
 
