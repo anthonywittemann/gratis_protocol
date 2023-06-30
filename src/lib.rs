@@ -38,7 +38,7 @@ pub struct LendingProtocol {
 pub struct Loan {
     pub collateral: Balance, // NOTE: this only works with NEAR as collateral currency
     pub borrowed: Balance,
-    pub collateral_ratio: BigDecimal,
+    pub collateral_ratio: u128,
 }
 
 #[near_bindgen]
@@ -96,20 +96,20 @@ impl LendingProtocol {
         return self.price_data.clone().unwrap();
     }
 
-    pub fn deposit_collateral(&mut self, mut amount: Balance) {
+    pub fn deposit_collateral(&mut self, mut amount: Balance) -> Promise {
         let fee = amount / 200; // 0.5% fee
         amount -= fee;
 
         assert!(amount > 0, "Deposit Amount should be greater than 0");
 
-        let account_id = env::signer_account_id();
+        let account_id = env::predecessor_account_id();
         let loan: &mut Loan = self.loans.entry(account_id.clone()).or_insert(Loan {
             collateral: 0,
             borrowed: 0,
             collateral_ratio: if self.lower_collateral_accounts.contains(&account_id) {
-                BigDecimal::from(LOWER_COLLATERAL_RATIO)
+                LOWER_COLLATERAL_RATIO
             } else {
-                BigDecimal::from(MIN_COLLATERAL_RATIO)
+                MIN_COLLATERAL_RATIO
             },
         });
 
@@ -117,7 +117,7 @@ impl LendingProtocol {
         Promise::new(account_id).transfer(amount);
     }
 
-    pub fn borrow(&mut self, usdt_amount: Balance) {
+    pub fn borrow(&mut self, usdt_amount: Balance) -> Promise {
         /*
            1. Calculate the collateral value
            1a. Calculate current loan value
@@ -128,51 +128,47 @@ impl LendingProtocol {
 
         assert!(usdt_amount > 0, "Borrow Amount should be greater than 0");
 
-        let signer_account_id: AccountId = env::signer_account_id();
-
-        println!("signer_account_id: {}", signer_account_id);
+        let predecessor_account_id: AccountId = env::predecessor_account_id();
+        println!("predecessor_account_id: {}", predecessor_account_id);
 
         let price = self.get_latest_price().prices[0].price.unwrap();
 
         let loan: &mut Loan = self
             .loans
-            .get_mut(&signer_account_id)
+            .get_mut(&predecessor_account_id)
             .expect("No collateral deposited");
 
         // get the latest price NEAR in USDT of the collateral asset
 
         // Calculate collateral and borrowed value
-        let collateral_value: BigDecimal =
+        // TODO convert to u128
+        let collateral_value: u128 =
             BigDecimal::from_balance_price(loan.collateral, &price, 0);
         let borrowed_value: Balance = loan.borrowed;
 
         println!("collateral_value: {}", collateral_value);
         println!("borrowed_value: {}", borrowed_value);
-
         println!("collateral_ratio: {}", loan.collateral_ratio);
 
-        // 0.000000000000000000014925
-        // 0.000000000000000000000124375
-
         // get max borrowable amount
-        let max_borrowable_amount = BigDecimal::from(100u128)
+        let max_borrowable_amount: u128 = 100u128
             * (collateral_value / loan.collateral_ratio)
-            - BigDecimal::from(borrowed_value);
+            - borrowed_value;
 
         println!("max_borrowable_amount: {}", max_borrowable_amount);
         println!("usdt_amount: {}", usdt_amount);
-
         println!("current_account_id: {}", env::current_account_id());
 
         // If max borrowable amount is greater than the requested amount, then borrow the requested amount
-        if BigDecimal::from(usdt_amount) <= max_borrowable_amount {
-            // TODO: borrow the requested amount
+        if usdt_amount <= max_borrowable_amount {
+            // borrow the requested amount
+            let usdt_contract_account_id: AccountId = AccountId::from_str(USDT_CONTRACT_ID.clone());
             loan.borrowed += usdt_amount;
-            Promise::new(env::current_account_id()).function_call(
+            Promise::new(usdt_contract_account_id).function_call(
                 "ft_transfer".to_string(),
                 format!(
                     r#"{{"receiver_id": "{}", "amount": "{}", "memo": "Borrowed USDT"}}"#,
-                    env::current_account_id(),
+                    predecessor_account_id.clone(),
                     usdt_amount
                 )
                 .into_bytes(),
@@ -185,7 +181,7 @@ impl LendingProtocol {
     }
 
     // The "repay" method calculates the actual repayment amount and the refund amount based on the outstanding loan. If there's an overpayment, it will refund the excess amount to the user.
-    pub fn repay(&mut self, usdt_amount: Balance) {
+    pub fn repay(&mut self, usdt_amount: Balance) -> Promise {
         /*
           1. Calculate the collateral value
           2. Calculate current loaned value
@@ -196,87 +192,35 @@ impl LendingProtocol {
 
         assert!(usdt_amount > 0, "Repay Amount should be greater than 0");
 
-        let signer_account_id: AccountId = env::signer_account_id();
+        let predecessor_account_id: AccountId = env::predecessor_account_id();
 
         let price = self.get_latest_price().prices[0].price.unwrap();
 
         let loan: &mut Loan = self
             .loans
-            .get_mut(&signer_account_id)
+            .get_mut(&predecessor_account_id)
             .expect("No collateral deposited");
         // get the latest price NEAR in USDT of the collateral asset
 
         // Calculate collateral and borrowed value
-        let collateral_value: BigDecimal =
+        // TODO convert to u128
+        let collateral_value: u128 =
             BigDecimal::from_balance_price(loan.collateral, &price, 0);
         let borrowed_value: Balance = loan.borrowed;
 
         // If max borrowable amount is greater than the requested amount, then borrow the requested amount
         if usdt_amount <= borrowed_value {
-            // TODO: borrow the requested amount
             loan.borrowed -= usdt_amount;
-            Promise::new(env::current_account_id()).function_call(
-                "ft_transfer".to_string(),
-                format!(
-                    r#"{{"receiver_id": "{}", "amount": "{}", "memo": "Borrowed USDT"}}"#,
-                    env::signer_account_id(),
-                    usdt_amount
-                )
-                .into_bytes(),
-                0,
-                Gas(50_000_000_000_000),
-            );
+            // return collateral repaid value in NEAR
+            // TODO calculate amount of collateral to return
+            let collateral_to_return: u128 = loan.collateral.clone().unwrap();
+            Promise::new(predecessor_account_id.clone()).transfer(collateral_to_return.0);
         } else {
-            assert_eq!(false, true, "Repaid amount is greater than borrowed amount");
+            // They overpaid. Protocol will return the full collateral in NEAR
+            loan.borrowed = 0u128;
+            let collateral_to_return: u128 = loan.collateral.clone().unwrap();
+            Promise::new(predecessor_account_id.clone()).transfer(collateral_to_return.0);
         }
-        // let max_repay_amount = BigDecimal::from(100u128)
-        // * (collateral_value / loan.collateral_ratio)
-        // - BigDecimal::from(borrowed_value);
-
-        // let fee: u128 = usdt_amount / 200; // 0.5% fee
-        // usdt_amount -= fee;
-
-        // let account_id: AccountId = env::signer_account_id();
-        // let loan = self.loans.get_mut(&account_id).expect("No outstanding loan");
-
-        // let (repay_amount, refund_amount) = if loan.borrowed > usdt_amount {
-        //     (usdt_amount, 0)
-        // } else {
-        //     (loan.borrowed, usdt_amount - loan.borrowed)
-        // };
-
-        // loan.borrowed -= repay_amount;
-
-        // if loan.borrowed == 0 {
-        //     loan.collateral = 0;
-        // }
-
-        // let mut promises= vec![Promise::new(AccountId::from_str(&USDT_CONTRACT_ID).unwrap()).function_call(
-        //     "ft_transfer_from".to_string(),
-        //     // TODO: replace LENDING_CONTRACT_ID with self.contract_id (if such functionality exists)
-        //     format!(
-        //         r#"{{"sender_id": "{}", "receiver_id": "{}", "amount": "{}", "memo": "Repayment"}}"#,
-        //         account_id, LENDING_CONTRACT_ID.clone(), repay_amount
-        //     ).into_bytes(),
-        //     0,
-        //     Gas(50_000_000_000_000),
-        // )];
-
-        // if refund_amount > 0 {
-        //     let refund_promise = Promise::new(account_id.clone()).function_call(
-        //         "ft_transfer".to_string(),
-        //         format!(
-        //             r#"{{"receiver_id": "{}", "amount": "{}", "memo": "Refund overpayment"}}"#,
-        //             account_id, refund_amount
-        //         ).into_bytes(),
-        //         0,
-        //         Gas(50_000_000_000_000),
-        //     );
-
-        //     promises.push(refund_promise);
-        // }
-
-        // near_sdk::PromiseOrValue::when_all(promises).unwrap();
     }
 }
 
