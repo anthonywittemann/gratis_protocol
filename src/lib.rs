@@ -9,8 +9,7 @@ use near_sdk::borsh::maybestd::collections::{HashMap, HashSet};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{
-    AccountId, Balance, env, ext_contract, Gas, log, near_bindgen, PanicOnDefault, Promise, PromiseError,
-    PublicKey, StorageUsage
+    AccountId, Balance, env, Gas, log, near_bindgen, PanicOnDefault, Promise
 };
 use std::str::FromStr;
 
