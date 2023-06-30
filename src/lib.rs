@@ -1,5 +1,3 @@
-use near_sdk::ext_contract;
-
 pub mod big_decimal;
 pub mod external;
 pub mod oracle;
@@ -11,17 +9,19 @@ use near_sdk::borsh::maybestd::collections::{HashMap, HashSet};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{
-    env, log, near_bindgen, AccountId, Balance, Gas, PanicOnDefault, Promise, PromiseError,
-    PublicKey, StorageUsage,
+    AccountId, Balance, env, ext_contract, Gas, log, near_bindgen, PanicOnDefault, Promise, PromiseError,
+    PublicKey, StorageUsage
 };
-
 use std::str::FromStr;
 
+
+// CONSTANTS
 const USDT_CONTRACT_ID: &str = "usdt.testnet"; // TODO: update with testnet address
 const LENDING_CONTRACT_ID: &str = "gratis_protocol.testnet"; // TODO: update with testnet address
 const PRICE_ORACLE_CONTRACT_ID: &str = "priceoracle.testnet";
 const MIN_COLLATERAL_RATIO: u128 = 120;
 const LOWER_COLLATERAL_RATIO: u128 = 105;
+
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, PanicOnDefault)]
@@ -66,6 +66,7 @@ impl LendingProtocol {
         return self.loans.clone();
     }
 
+    #[cfg(test)]
     fn get_usdt_value(&self, collateral: Balance) -> Promise {
         let gas: Gas = Gas(50_000_000_000_000);
 
