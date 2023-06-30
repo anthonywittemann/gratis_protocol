@@ -114,11 +114,11 @@ impl LendingProtocol {
         });
 
         loan.collateral += amount;
-        Promise::new(account_id).transfer(amount);
+        Promise::new(account_id).transfer(amount)
     }
 
-    pub fn borrow(&mut self, usdt_amount: Balance) -> Promise {
-        /*
+    pub fn borrow(&mut self, usdt_amount: Balance) {
+        /*S
            1. Calculate the collateral value
            1a. Calculate current loan value
            2. Calculate max borrowable amount
@@ -162,7 +162,7 @@ impl LendingProtocol {
         // If max borrowable amount is greater than the requested amount, then borrow the requested amount
         if usdt_amount <= max_borrowable_amount {
             // borrow the requested amount
-            let usdt_contract_account_id: AccountId = AccountId::from_str(USDT_CONTRACT_ID.clone());
+            let usdt_contract_account_id: AccountId = AccountId::from_str(USDT_CONTRACT_ID.clone()).unwrap();
             loan.borrowed += usdt_amount;
             Promise::new(usdt_contract_account_id).function_call(
                 "ft_transfer".to_string(),
@@ -176,7 +176,7 @@ impl LendingProtocol {
                 Gas(50_000_000_000_000),
             );
         } else {
-            assert_eq!(false, true, "Insufficient collateral");
+            assert_eq!(false, true, "Insufficient collateral")
         }
     }
 
@@ -213,13 +213,13 @@ impl LendingProtocol {
             loan.borrowed -= usdt_amount;
             // return collateral repaid value in NEAR
             // TODO calculate amount of collateral to return
-            let collateral_to_return: u128 = loan.collateral.clone().unwrap();
-            Promise::new(predecessor_account_id.clone()).transfer(collateral_to_return.0);
+            let collateral_to_return: u128 = loan.collateral.clone();
+            Promise::new(predecessor_account_id.clone()).transfer(collateral_to_return)
         } else {
             // They overpaid. Protocol will return the full collateral in NEAR
             loan.borrowed = 0u128;
-            let collateral_to_return: u128 = loan.collateral.clone().unwrap();
-            Promise::new(predecessor_account_id.clone()).transfer(collateral_to_return.0);
+            let collateral_to_return: u128 = loan.collateral.clone();
+            Promise::new(predecessor_account_id.clone()).transfer(collateral_to_return)
         }
     }
 }
