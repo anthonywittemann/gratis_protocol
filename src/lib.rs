@@ -17,6 +17,7 @@ const LENDING_CONTRACT_ID: &str = "gratis_protocol.testnet"; // TODO: update wit
 const PRICE_ORACLE_CONTRACT_ID: &str = "priceoracle.testnet";
 const MIN_COLLATERAL_RATIO: u128 = 120;
 const LOWER_COLLATERAL_RATIO: u128 = 105;
+pub const ONE_NEAR: Balance = 1_000_000_000_000_000_000_000_000;
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, PanicOnDefault)]
@@ -62,38 +63,22 @@ impl LendingProtocol {
         return self.loans.clone();
     }
 
-    pub fn get_usdt_value(&self) -> Promise {
+    pub fn get_prices(&self) -> Promise {
         let gas: Gas = Gas(50_000_000_000_000);
 
         ext_price_oracle::ext(self.oracle_id.clone())
             .with_static_gas(gas)
             .get_price_data(Some(vec![
-                "usdt.fakes.testnet".to_string(),
                 "wrap.testnet".to_string(),
+                "usdt.fakes.testnet".to_string(),
             ]))
-            .then(Self::ext(env::current_account_id()).get_usdt_callback())
+            .then(Self::ext(env::current_account_id()).get_price_callback())
     }
 
     #[private]
-    pub fn get_usdt_callback(
-        &mut self,
-        #[callback] call_result: Result<PriceData, String>,
-    ) -> PriceData {
-        match call_result {
-            // data => {
-            //     self.price_data = Some(data.clone());
-            //     return data;
-            // }
-            Ok(data) => {
-                // print!("data: {:?}", data.timestamp);
-                self.price_data = Some(data.clone());
-                return data;
-            }
-            Err(err) => {
-                log!("PromiseError occurred: {:?}", err);
-                panic!("Failed to fetch price data."); // or however you want to handle this failure
-            }
-        }
+    pub fn get_price_callback(&mut self, #[callback] data: PriceData) -> PriceData {
+        self.price_data = Some(data.clone());
+        data
     }
 
     pub fn get_latest_price(&self) -> PriceData {
@@ -101,6 +86,7 @@ impl LendingProtocol {
     }
 
     pub fn deposit_collateral(&mut self, mut amount: Balance) -> Promise {
+        amount = amount * ONE_NEAR;
         let fee = amount / 200; // 0.5% fee
         amount -= fee;
 
@@ -121,7 +107,7 @@ impl LendingProtocol {
         Promise::new(account_id).transfer(amount)
     }
 
-    pub fn borrow(&mut self, usdt_amount: Balance) {
+    pub fn borrow(&mut self, usdt_amount: u128) {
         /*S
            1. Calculate the collateral value
            1a. Calculate current loan value
@@ -132,14 +118,19 @@ impl LendingProtocol {
 
         assert!(usdt_amount > 0, "Borrow Amount should be greater than 0");
 
-        let predecessor_account_id: AccountId = env::predecessor_account_id();
-        println!("predecessor_account_id: {}", predecessor_account_id);
+        let account_id: AccountId = env::predecessor_account_id();
+        log!("predecessor_account_id: {}", account_id);
 
+        // Get NEAR Price
         let price = self.get_latest_price().prices[0].price.unwrap();
+
+        let near_usdt_price: u128 = price.multiplier / 10000;
+        log!("price: {}", price.multiplier);
+        log!("near_usdt_price: {}", near_usdt_price);
 
         let loan: &mut Loan = self
             .loans
-            .get_mut(&predecessor_account_id)
+            .get_mut(&account_id)
             .expect("No collateral deposited");
 
         // get the latest price NEAR in USDT of the collateral asset
@@ -148,19 +139,26 @@ impl LendingProtocol {
         // TODO convert to u128
         let collateral_value: u128 =
             BigDecimal::round_u128(&BigDecimal::from_balance_price(loan.collateral, &price, 0));
+
+        // let collateral_value: Balance = loan.collateral * price;
+
         let borrowed_value: Balance = loan.borrowed;
 
-        // println!("collateral_value: {}", collateral_value);
-        // println!("borrowed_value: {}", borrowed_value);
-        // println!("collateral_ratio: {}", loan.collateral_ratio);
+        log!("collateral_value: {}", collateral_value);
+        log!("borrowed_value: {}", borrowed_value);
+        log!("collateral_ratio: {}", loan.collateral_ratio);
 
         // get max borrowable amount
-        let max_borrowable_amount: u128 =
-            100u128 * (collateral_value / loan.collateral_ratio) - borrowed_value;
+        let total_max_borrowable_amount: u128 =
+            100u128 * (collateral_value / loan.collateral_ratio);
 
-        // println!("max_borrowable_amount: {}", max_borrowable_amount);
-        // println!("usdt_amount: {}", usdt_amount);
-        // println!("current_account_id: {}", env::current_account_id());
+        let max_borrowable_amount = total_max_borrowable_amount
+            .checked_sub(borrowed_value)
+            .unwrap_or(0);
+
+        log!("max_borrowable_amount: {}", max_borrowable_amount);
+        log!("usdt_amount: {}", usdt_amount);
+        log!("current_account_id: {}", env::current_account_id());
 
         // If max borrowable amount is greater than the requested amount, then borrow the requested amount
         if usdt_amount <= max_borrowable_amount {
@@ -172,7 +170,7 @@ impl LendingProtocol {
                 "ft_transfer".to_string(),
                 format!(
                     r#"{{"receiver_id": "{}", "amount": "{}", "memo": "Borrowed USDT"}}"#,
-                    predecessor_account_id.clone(),
+                    account_id.clone(),
                     usdt_amount
                 )
                 .into_bytes(),
@@ -180,7 +178,9 @@ impl LendingProtocol {
                 Gas(50_000_000_000_000),
             );
         } else {
-            assert_eq!(false, true, "Insufficient collateral")
+            log!("max_borrowable_amount: {}", max_borrowable_amount);
+            log!("usdt_amount: {}", usdt_amount);
+            // assert_eq!(false, true, "Insufficient collateral")
         }
     }
 
@@ -260,7 +260,7 @@ mod tests {
 
         let contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
         let usdt_amount: Balance = 100;
-        let p = contract.get_usdt_value(usdt_amount);
+        let p = contract.get_prices();
         // let result = contract.get_usdt_callback(); // Replace with actual callback method
         // println!("{:?}", result.prices.first().unwrap().price);
 
