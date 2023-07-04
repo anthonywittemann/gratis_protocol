@@ -8,11 +8,8 @@ use crate::external::*;
 use near_sdk::borsh::maybestd::collections::{HashMap, HashSet};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Deserialize, Serialize};
-use near_sdk::{
-    AccountId, Balance, env, Gas, log, near_bindgen, PanicOnDefault, Promise
-};
+use near_sdk::{env, log, near_bindgen, AccountId, Balance, Gas, PanicOnDefault, Promise};
 use std::str::FromStr;
-
 
 // CONSTANTS
 const USDT_CONTRACT_ID: &str = "usdt.testnet"; // TODO: update with testnet address
@@ -20,7 +17,6 @@ const LENDING_CONTRACT_ID: &str = "gratis_protocol.testnet"; // TODO: update wit
 const PRICE_ORACLE_CONTRACT_ID: &str = "priceoracle.testnet";
 const MIN_COLLATERAL_RATIO: u128 = 120;
 const LOWER_COLLATERAL_RATIO: u128 = 105;
-
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, PanicOnDefault)]
@@ -42,6 +38,7 @@ pub struct Loan {
 
 #[near_bindgen]
 impl LendingProtocol {
+    #[init]
     pub fn new(lower_collateral_accounts: Vec<AccountId>) -> Self {
         assert!(
             env::state_read::<Self>().is_none(),
@@ -65,13 +62,15 @@ impl LendingProtocol {
         return self.loans.clone();
     }
 
-    #[cfg(test)]
-    fn get_usdt_value(&self, collateral: Balance) -> Promise {
+    pub fn get_usdt_value(&self) -> Promise {
         let gas: Gas = Gas(50_000_000_000_000);
 
         ext_price_oracle::ext(self.oracle_id.clone())
             .with_static_gas(gas)
-            .get_price_data(Some(vec!["usdt.fakes.testnet".to_string()]))
+            .get_price_data(Some(vec![
+                "usdt.fakes.testnet".to_string(),
+                "wrap.testnet".to_string(),
+            ]))
             .then(Self::ext(env::current_account_id()).get_usdt_callback())
     }
 
@@ -81,7 +80,12 @@ impl LendingProtocol {
         #[callback] call_result: Result<PriceData, String>,
     ) -> PriceData {
         match call_result {
+            // data => {
+            //     self.price_data = Some(data.clone());
+            //     return data;
+            // }
             Ok(data) => {
+                // print!("data: {:?}", data.timestamp);
                 self.price_data = Some(data.clone());
                 return data;
             }
@@ -142,28 +146,27 @@ impl LendingProtocol {
 
         // Calculate collateral and borrowed value
         // TODO convert to u128
-        let collateral_value: u128 = BigDecimal::round_u128(
-            &BigDecimal::from_balance_price(loan.collateral, &price, 0)
-        );
+        let collateral_value: u128 =
+            BigDecimal::round_u128(&BigDecimal::from_balance_price(loan.collateral, &price, 0));
         let borrowed_value: Balance = loan.borrowed;
 
-        println!("collateral_value: {}", collateral_value);
-        println!("borrowed_value: {}", borrowed_value);
-        println!("collateral_ratio: {}", loan.collateral_ratio);
+        // println!("collateral_value: {}", collateral_value);
+        // println!("borrowed_value: {}", borrowed_value);
+        // println!("collateral_ratio: {}", loan.collateral_ratio);
 
         // get max borrowable amount
-        let max_borrowable_amount: u128 = 100u128
-            * (collateral_value / loan.collateral_ratio)
-            - borrowed_value;
+        let max_borrowable_amount: u128 =
+            100u128 * (collateral_value / loan.collateral_ratio) - borrowed_value;
 
-        println!("max_borrowable_amount: {}", max_borrowable_amount);
-        println!("usdt_amount: {}", usdt_amount);
-        println!("current_account_id: {}", env::current_account_id());
+        // println!("max_borrowable_amount: {}", max_borrowable_amount);
+        // println!("usdt_amount: {}", usdt_amount);
+        // println!("current_account_id: {}", env::current_account_id());
 
         // If max borrowable amount is greater than the requested amount, then borrow the requested amount
         if usdt_amount <= max_borrowable_amount {
             // borrow the requested amount
-            let usdt_contract_account_id: AccountId = AccountId::from_str(USDT_CONTRACT_ID.clone()).unwrap();
+            let usdt_contract_account_id: AccountId =
+                AccountId::from_str(USDT_CONTRACT_ID.clone()).unwrap();
             loan.borrowed += usdt_amount;
             Promise::new(usdt_contract_account_id).function_call(
                 "ft_transfer".to_string(),
@@ -205,9 +208,8 @@ impl LendingProtocol {
 
         // Calculate collateral and borrowed value
         // TODO convert to u128
-        let collateral_value: u128 = BigDecimal::round_u128(
-            &BigDecimal::from_balance_price(loan.collateral, &price, 0)
-        );
+        let collateral_value: u128 =
+            BigDecimal::round_u128(&BigDecimal::from_balance_price(loan.collateral, &price, 0));
         let borrowed_value: Balance = loan.borrowed;
 
         // If max borrowable amount is greater than the requested amount, then borrow the requested amount
