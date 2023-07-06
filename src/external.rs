@@ -68,6 +68,27 @@ trait PriceOracle {
     fn get_price_data(&self, asset_ids: Option<Vec<AssetId>>) -> PriceData;
 }
 
+// USDT interface, for cross-contract calls
+#[ext_contract(ext_usdt)]
+trait Usdt {
+    fn ft_transfer_call(
+        &mut self,
+        receiver_id: AccountId,
+        amount: U128,
+        memo: Option<String>,
+        msg: String,
+    ) -> String;
+
+    fn ft_on_transfer(&mut self, sender_id: AccountId, amount: U128, msg: String) -> Promise;
+
+    fn ft_transfer(
+        &mut self,
+        receiver_id: AccountId,
+        amount: U128,
+        memo: Option<String>,
+    ) -> Promise;
+}
+
 pub mod u128_dec_format {
     use near_sdk::serde::de;
     use near_sdk::serde::{Deserialize, Deserializer, Serializer};

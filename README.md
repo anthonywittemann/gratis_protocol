@@ -47,3 +47,7 @@ near call $G deposit_collateral '{"amount": 99}' --accountId tomohiro.testnet
 near call $G borrow '{"usdt_amount": 30}' --accountId tomohiro.testnet --gas 300000000000000
 
 near call $G repay '{"usdt_amount": 50}' --accountId tomohiro.testnet --gas 300000000000000
+
+near call $G call_ft_transfer '{"receiver_id": "kenobi.testnet", "amount": "1", "memo": "Test", "msg": "Test"}' --accountId tomohiro.testnet --gas 300000000000000 --depositYocto 1
+
+near call $G transfer_to_self '{"amount": "1"}' --accountId kenobi.testnet --gas 300000000000000 --depositYocto 1

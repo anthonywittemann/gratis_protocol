@@ -4,20 +4,29 @@ pub mod oracle;
 
 use crate::big_decimal::*;
 use crate::external::*;
+use near_sdk::ext_contract;
 
+use near_contract_standards::fungible_token::metadata::{
+    FungibleTokenMetadata, FungibleTokenMetadataProvider, FT_METADATA_SPEC,
+};
+use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
+use near_contract_standards::fungible_token::resolver::FungibleTokenResolver;
 use near_sdk::borsh::maybestd::collections::{HashMap, HashSet};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
+use near_sdk::env::current_account_id;
+use near_sdk::json_types::U128;
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{env, log, near_bindgen, AccountId, Balance, Gas, PanicOnDefault, Promise};
+use near_sdk::{is_promise_success, serde_json, PromiseOrValue};
 use std::str::FromStr;
-
 // CONSTANTS
-const USDT_CONTRACT_ID: &str = "usdt.testnet"; // TODO: update with testnet address
+const USDT_CONTRACT_ID: &str = "usdt.fakes.testnet"; // TODO: update with testnet address
 const LENDING_CONTRACT_ID: &str = "gratis_protocol.testnet"; // TODO: update with testnet address
 const PRICE_ORACLE_CONTRACT_ID: &str = "priceoracle.testnet";
 const MIN_COLLATERAL_RATIO: u128 = 120;
 const LOWER_COLLATERAL_RATIO: u128 = 105;
 pub const ONE_NEAR: Balance = 1_000_000_000_000_000_000_000_000;
+pub const GAS_FOR_FT_TRANSFER: Gas = Gas(50_000_000_000_000);
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, PanicOnDefault)]
@@ -35,6 +44,49 @@ pub struct Loan {
     pub collateral: Balance, // NOTE: this only works with NEAR as collateral currency
     pub borrowed: Balance,
     pub collateral_ratio: u128,
+}
+
+#[near_bindgen]
+impl FungibleTokenReceiver for LendingProtocol {
+    fn ft_on_transfer(
+        &mut self,
+        sender_id: AccountId,
+        amount: U128,
+        msg: String,
+    ) -> PromiseOrValue<U128> {
+        // Empty message is used for stable coin depositing.
+        assert!(msg.is_empty());
+
+        let token_id = env::predecessor_account_id();
+
+        // self.stable_treasury
+        //     .deposit(&mut self.token, &sender_id, &token_id, amount.into());
+
+        // Do someting
+
+        // Unused tokens: 0.
+        PromiseOrValue::Value(U128(0))
+    }
+}
+
+#[near_bindgen]
+impl FungibleTokenResolver for LendingProtocol {
+    #[private]
+    fn ft_resolve_transfer(
+        &mut self,
+        sender_id: AccountId,
+        receiver_id: AccountId,
+        amount: U128,
+    ) -> U128 {
+        let sender_id: AccountId = sender_id.into();
+        // IDK what to do here
+        return U128(0);
+    }
+}
+
+#[ext_contract(ext_fungible_token)]
+pub trait FungibleToken {
+    fn ft_transfer_call(&mut self, receiver_id: AccountId, amount: U128, msg: String) -> Promise;
 }
 
 #[near_bindgen]
@@ -182,6 +234,50 @@ impl LendingProtocol {
             log!("usdt_amount: {}", usdt_amount);
             // assert_eq!(false, true, "Insufficient collateral")
         }
+    }
+
+    #[payable]
+    pub fn call_ft_transfer(
+        &mut self,
+        receiver_id: AccountId,
+        amount: U128,
+        memo: Option<String>,
+    ) -> Promise {
+        let usdt_contract_id: AccountId = AccountId::from_str(&USDT_CONTRACT_ID).unwrap();
+        ext_usdt::ext(usdt_contract_id.clone())
+            .with_static_gas(GAS_FOR_FT_TRANSFER)
+            .with_attached_deposit(1)
+            .ft_transfer(receiver_id, amount, memo)
+            .then(Self::ext(env::current_account_id()).on_ft_transfer())
+    }
+
+    #[private]
+    pub fn on_ft_transfer(&self) {
+        // Here you can handle the result of `ft_transfer_call`.
+        // `success` indicates whether the transfer was successful.
+        if "idk" != "" {
+            log!("Transfer success!");
+        } else {
+            log!("Transfer failed!");
+        }
+    }
+
+    // DOESN"T WORK
+    // May need to call USDT contract directly from the frontend instead of using this method
+    // Will use on_ft_transfer method to handle the result of ft_transfer_call to determine internal transfer stuff
+    #[payable]
+    pub fn transfer_to_self(&mut self, amount: U128) {
+        let usdt_contract_id: AccountId = AccountId::from_str(&USDT_CONTRACT_ID).unwrap();
+
+        ext_usdt::ext(usdt_contract_id.clone())
+            .with_static_gas(GAS_FOR_FT_TRANSFER)
+            .with_attached_deposit(1)
+            .ft_transfer_call(
+                env::current_account_id(), // receiver_id is the smart contract itself
+                amount,
+                None, // optional message
+                "MSG".to_string(),
+            );
     }
 
     // The "repay" method calculates the actual repayment amount and the refund amount based on the outstanding loan. If there's an overpayment, it will refund the excess amount to the user.
