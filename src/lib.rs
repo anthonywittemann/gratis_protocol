@@ -6,9 +6,6 @@ use crate::big_decimal::*;
 use crate::external::*;
 use near_sdk::ext_contract;
 
-use near_contract_standards::fungible_token::metadata::{
-    FungibleTokenMetadata, FungibleTokenMetadataProvider, FT_METADATA_SPEC,
-};
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
 use near_contract_standards::fungible_token::resolver::FungibleTokenResolver;
 use near_sdk::borsh::maybestd::collections::{HashMap, HashSet};
@@ -27,6 +24,7 @@ const MIN_COLLATERAL_RATIO: u128 = 120;
 const LOWER_COLLATERAL_RATIO: u128 = 105;
 pub const ONE_NEAR: Balance = 1_000_000_000_000_000_000_000_000;
 pub const GAS_FOR_FT_TRANSFER: Gas = Gas(50_000_000_000_000);
+pub const SAFE_GAS: Balance = 50_000_000_000_000;
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, PanicOnDefault)]
@@ -42,7 +40,7 @@ pub struct LendingProtocol {
 #[serde(crate = "near_sdk::serde")]
 pub struct Loan {
     pub collateral: Balance, // NOTE: this only works with NEAR as collateral currency
-    pub borrowed: Balance,
+    pub borrowed: u128,
     pub collateral_ratio: u128,
 }
 
@@ -55,16 +53,34 @@ impl FungibleTokenReceiver for LendingProtocol {
         msg: String,
     ) -> PromiseOrValue<U128> {
         // Empty message is used for stable coin depositing.
-        assert!(msg.is_empty());
 
         let token_id = env::predecessor_account_id();
 
-        // self.stable_treasury
-        //     .deposit(&mut self.token, &sender_id, &token_id, amount.into());
+        // Update Borrowed Balance
+        let mut loan: &mut Loan = self
+            .loans
+            .get_mut(&sender_id)
+            .expect("No collateral deposited");
 
-        // Do someting
+        // Handle transfer case when it is more than the borrowed amount
+        assert!(amount.le(&loan.borrowed.into()));
 
-        // Unused tokens: 0.
+        // let collateral_value: Balance = loan.collateral * price;
+
+        loan.borrowed = loan.borrowed - amount.0;
+
+        // TODO: Handle case to close the loan
+        if msg == "close" && loan.borrowed == 0 {
+            log!("Close the Loan");
+            let collateral = loan.collateral;
+            log!("Collateral: {}", collateral);
+            log!("Send back: {}", collateral - SAFE_GAS);
+            // gratis.transfer(collateral);
+            Promise::new(sender_id.clone()).transfer(collateral - SAFE_GAS);
+            loan.collateral = 0;
+            self.loans.remove(&sender_id);
+        }
+
         PromiseOrValue::Value(U128(0))
     }
 }
@@ -82,11 +98,6 @@ impl FungibleTokenResolver for LendingProtocol {
         // IDK what to do here
         return U128(0);
     }
-}
-
-#[ext_contract(ext_fungible_token)]
-pub trait FungibleToken {
-    fn ft_transfer_call(&mut self, receiver_id: AccountId, amount: U128, msg: String) -> Promise;
 }
 
 #[near_bindgen]
@@ -137,9 +148,16 @@ impl LendingProtocol {
         return self.price_data.clone().unwrap();
     }
 
-    pub fn deposit_collateral(&mut self, mut amount: Balance) -> Promise {
+    #[payable]
+    pub fn deposit_collateral(&mut self, mut amount: Balance) -> bool {
+        let deposit = env::attached_deposit();
+        let mut fee = amount / 200; // 0.5% fee
         amount = amount * ONE_NEAR;
-        let fee = amount / 200; // 0.5% fee
+        assert!(
+            deposit == amount,
+            "Attached deposit is not equal to the amount"
+        );
+        fee = fee * ONE_NEAR;
         amount -= fee;
 
         assert!(amount > 0, "Deposit Amount should be greater than 0");
@@ -155,10 +173,12 @@ impl LendingProtocol {
             },
         });
 
-        loan.collateral += amount;
-        Promise::new(account_id).transfer(amount)
+        loan.collateral += deposit;
+        true
+        // Promise::new(account_id).transfer(amount)
     }
 
+    #[payable]
     pub fn borrow(&mut self, usdt_amount: u128) {
         /*S
            1. Calculate the collateral value
@@ -187,6 +207,7 @@ impl LendingProtocol {
 
         // get the latest price NEAR in USDT of the collateral asset
 
+        log!("raw collateral; {}", loan.collateral);
         // Calculate collateral and borrowed value
         // TODO convert to u128
         let collateral_value: u128 =
@@ -201,8 +222,7 @@ impl LendingProtocol {
         log!("collateral_ratio: {}", loan.collateral_ratio);
 
         // get max borrowable amount
-        let total_max_borrowable_amount: u128 =
-            100u128 * (collateral_value / loan.collateral_ratio);
+        let total_max_borrowable_amount: u128 = 100u128 * collateral_value / loan.collateral_ratio;
 
         let max_borrowable_amount = total_max_borrowable_amount
             .checked_sub(borrowed_value)
@@ -226,7 +246,7 @@ impl LendingProtocol {
                     usdt_amount
                 )
                 .into_bytes(),
-                0,
+                1,
                 Gas(50_000_000_000_000),
             );
         } else {
@@ -249,6 +269,10 @@ impl LendingProtocol {
             .with_attached_deposit(1)
             .ft_transfer(receiver_id, amount, memo)
             .then(Self::ext(env::current_account_id()).on_ft_transfer())
+    }
+
+    pub fn close(&mut self, collateral: Balance, sender_id: AccountId) {
+        Promise::new(sender_id.clone()).transfer(collateral * ONE_NEAR);
     }
 
     #[private]
