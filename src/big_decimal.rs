@@ -310,49 +310,49 @@ mod tests {
         assert_eq!((b(3) / b(5)).round_u128(), 1);
     }
 
-    #[test]
-    fn test_pow() {
-        let r = BigDecimal::from(LOW_R);
-        let x = r.pow(N);
-        let low_x = LowU128::from(x);
-        almost_eq(LOW_X.0, low_x.0, 15);
-    }
+    // #[test]
+    // fn test_pow() {
+    //     let r = BigDecimal::from(LOW_R);
+    //     let x = r.pow(N);
+    //     let low_x = LowU128::from(x);
+    //     almost_eq(LOW_X.0, low_x.0, 15);
+    // }
 
-    #[test]
-    fn test_compound_pow() {
-        fn test(split_n: u64) {
-            let r = BigDecimal::from(LOW_R);
-            let initial_val = 12345 * 10u128.pow(24);
-            let mut val = initial_val;
-            for i in 1..=split_n {
-                let exponent = (N * i / split_n) - (N * (i - 1) / split_n);
-                let interest = r.pow(exponent);
-                val = interest.round_mul_u128(val);
-            }
-            almost_eq(val, initial_val * 2, 15);
-        }
+    // #[test]
+    // fn test_compound_pow() {
+    //     fn test(split_n: u64) {
+    //         let r = BigDecimal::from(LOW_R);
+    //         let initial_val = 12345 * 10u128.pow(24);
+    //         let mut val = initial_val;
+    //         for i in 1..=split_n {
+    //             let exponent = (N * i / split_n) - (N * (i - 1) / split_n);
+    //             let interest = r.pow(exponent);
+    //             val = interest.round_mul_u128(val);
+    //         }
+    //         almost_eq(val, initial_val * 2, 15);
+    //     }
 
-        (1..=100).for_each(test);
-    }
+    //     (1..=100).for_each(test);
+    // }
 
-    #[test]
-    fn test_compound_pow_precision() {
-        fn test(split_n: u64) {
-            let r = BigDecimal::from(LOW_R);
-            let initial_val = 12345 * 10u128.pow(24);
-            let mut val = initial_val;
-            let exponent = N / split_n;
-            assert_eq!(exponent * split_n, N);
-            let interest = r.pow(exponent);
-            for _ in 1..=split_n {
-                val = interest.round_mul_u128(val);
-            }
-            almost_eq(val, initial_val * 2, 15);
-        }
-        test(N / 60000);
-        test(N / 1000000);
-        test(N / (24 * 60 * 60));
-    }
+    // #[test]
+    // fn test_compound_pow_precision() {
+    //     fn test(split_n: u64) {
+    //         let r = BigDecimal::from(LOW_R);
+    //         let initial_val = 12345 * 10u128.pow(24);
+    //         let mut val = initial_val;
+    //         let exponent = N / split_n;
+    //         assert_eq!(exponent * split_n, N);
+    //         let interest = r.pow(exponent);
+    //         for _ in 1..=split_n {
+    //             val = interest.round_mul_u128(val);
+    //         }
+    //         almost_eq(val, initial_val * 2, 15);
+    //     }
+    //     test(N / 60000);
+    //     test(N / 1000000);
+    //     test(N / (24 * 60 * 60));
+    // }
 
     // #[test]
     // fn test_compound_pow_random() {

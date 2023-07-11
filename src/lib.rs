@@ -174,7 +174,7 @@ impl LendingProtocol {
         });
 
         loan.collateral += deposit;
-        true
+        return true;
         // Promise::new(account_id).transfer(amount)
     }
 
@@ -272,36 +272,10 @@ impl LendingProtocol {
     }
 
     pub fn close(&mut self, collateral: Balance, sender_id: AccountId) {
-        Promise::new(sender_id.clone()).transfer(collateral * ONE_NEAR);
-    }
-
-    #[private]
-    pub fn on_ft_transfer(&self) {
-        // Here you can handle the result of `ft_transfer_call`.
-        // `success` indicates whether the transfer was successful.
-        if "idk" != "" {
-            log!("Transfer success!");
-        } else {
-            log!("Transfer failed!");
+        let loan = self.loans.get_mut(&sender_id).unwrap();
+        if loan.borrowed == 0 {
+            Promise::new(sender_id.clone()).transfer(collateral * ONE_NEAR);
         }
-    }
-
-    // DOESN"T WORK
-    // May need to call USDT contract directly from the frontend instead of using this method
-    // Will use on_ft_transfer method to handle the result of ft_transfer_call to determine internal transfer stuff
-    #[payable]
-    pub fn transfer_to_self(&mut self, amount: U128) {
-        let usdt_contract_id: AccountId = AccountId::from_str(&USDT_CONTRACT_ID).unwrap();
-
-        ext_usdt::ext(usdt_contract_id.clone())
-            .with_static_gas(GAS_FOR_FT_TRANSFER)
-            .with_attached_deposit(1)
-            .ft_transfer_call(
-                env::current_account_id(), // receiver_id is the smart contract itself
-                amount,
-                None, // optional message
-                "MSG".to_string(),
-            );
     }
 
     // The "repay" method calculates the actual repayment amount and the refund amount based on the outstanding loan. If there's an overpayment, it will refund the excess amount to the user.
@@ -354,10 +328,20 @@ mod tests {
 
     use near_sdk::{
         borsh::{self, BorshSerialize},
-        near_bindgen,
+        env, near_bindgen,
+        serde_json::json,
         test_utils::VMContextBuilder,
         testing_env, AccountId, BorshStorageKey, Promise, PromiseOrValue, StorageUsage,
     };
+
+    // Auxiliar fn: create a mock context
+    fn set_context(predecessor: &str, amount: Balance) {
+        let mut builder = VMContextBuilder::new();
+        builder.predecessor_account_id(predecessor.parse().unwrap());
+        builder.attached_deposit(amount);
+
+        testing_env!(builder.build());
+    }
 
     #[test]
     pub fn initialize() {
@@ -407,6 +391,8 @@ mod tests {
         let usdt_amount: Balance = 10000;
         let borrow_amount: Balance = 50;
 
+        set_context("alice.near", 10000 * ONE_NEAR);
+
         contract.deposit_collateral(usdt_amount);
         contract.borrow(borrow_amount);
 
@@ -433,7 +419,10 @@ mod tests {
         let usdt_amount: Balance = 10000;
         let borrow_amount: Balance = 50;
 
+        set_context("alice.near", 10000 * ONE_NEAR);
+
         contract.deposit_collateral(usdt_amount);
+
         contract.borrow(borrow_amount);
         contract.repay(borrow_amount);
 
