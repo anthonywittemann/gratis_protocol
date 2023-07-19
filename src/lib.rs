@@ -4,10 +4,8 @@ pub mod oracle;
 
 use crate::big_decimal::*;
 use crate::external::*;
-use near_sdk::ext_contract;
 
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
-use near_contract_standards::fungible_token::resolver::FungibleTokenResolver;
 use near_sdk::borsh::maybestd::collections::{HashMap, HashSet};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::env::current_account_id;
@@ -16,6 +14,7 @@ use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{env, log, near_bindgen, AccountId, Balance, Gas, PanicOnDefault, Promise};
 use near_sdk::{is_promise_success, serde_json, PromiseOrValue};
 use std::str::FromStr;
+
 // CONSTANTS
 const USDT_CONTRACT_ID: &str = "usdt.fakes.testnet"; // TODO: update with testnet address
 const LENDING_CONTRACT_ID: &str = "gratis_protocol.testnet"; // TODO: update with testnet address
@@ -86,21 +85,6 @@ impl FungibleTokenReceiver for LendingProtocol {
 }
 
 #[near_bindgen]
-impl FungibleTokenResolver for LendingProtocol {
-    #[private]
-    fn ft_resolve_transfer(
-        &mut self,
-        sender_id: AccountId,
-        receiver_id: AccountId,
-        amount: U128,
-    ) -> U128 {
-        let sender_id: AccountId = sender_id.into();
-        // IDK what to do here
-        return U128(0);
-    }
-}
-
-#[near_bindgen]
 impl LendingProtocol {
     #[init]
     pub fn new(lower_collateral_accounts: Vec<AccountId>) -> Self {
@@ -108,6 +92,7 @@ impl LendingProtocol {
             env::state_read::<Self>().is_none(),
             "Contract is already initialized"
         );
+
         assert_eq!(
             env::predecessor_account_id(),
             env::current_account_id(),
@@ -120,32 +105,6 @@ impl LendingProtocol {
             oracle_id: AccountId::from_str(&PRICE_ORACLE_CONTRACT_ID).unwrap(),
             price_data: Some(PriceData::default()),
         }
-    }
-
-    pub fn get_all_loans(&self) -> HashMap<AccountId, Loan> {
-        return self.loans.clone();
-    }
-
-    pub fn get_prices(&self) -> Promise {
-        let gas: Gas = Gas(50_000_000_000_000);
-
-        ext_price_oracle::ext(self.oracle_id.clone())
-            .with_static_gas(gas)
-            .get_price_data(Some(vec![
-                "wrap.testnet".to_string(),
-                "usdt.fakes.testnet".to_string(),
-            ]))
-            .then(Self::ext(env::current_account_id()).get_price_callback())
-    }
-
-    #[private]
-    pub fn get_price_callback(&mut self, #[callback] data: PriceData) -> PriceData {
-        self.price_data = Some(data.clone());
-        data
-    }
-
-    pub fn get_latest_price(&self) -> PriceData {
-        return self.price_data.clone().unwrap();
     }
 
     #[payable]
@@ -256,21 +215,6 @@ impl LendingProtocol {
         }
     }
 
-    #[payable]
-    pub fn call_ft_transfer(
-        &mut self,
-        receiver_id: AccountId,
-        amount: U128,
-        memo: Option<String>,
-    ) -> Promise {
-        let usdt_contract_id: AccountId = AccountId::from_str(&USDT_CONTRACT_ID).unwrap();
-        ext_usdt::ext(usdt_contract_id.clone())
-            .with_static_gas(GAS_FOR_FT_TRANSFER)
-            .with_attached_deposit(1)
-            .ft_transfer(receiver_id, amount, memo)
-            .then(Self::ext(env::current_account_id()).on_ft_transfer())
-    }
-
     pub fn close(&mut self, collateral: Balance, sender_id: AccountId) {
         let loan = self.loans.get_mut(&sender_id).unwrap();
         if loan.borrowed == 0 {
@@ -319,6 +263,36 @@ impl LendingProtocol {
             let collateral_to_return: u128 = loan.collateral.clone();
             Promise::new(predecessor_account_id.clone()).transfer(collateral_to_return)
         }
+    }
+
+    /* -----------------------------------------------------------------------------------
+    ------------------------------------ GETTERS -----------------------------------------
+    -------------------------------------------------------------------------------------- */
+
+    pub fn get_all_loans(&self) -> HashMap<AccountId, Loan> {
+        return self.loans.clone();
+    }
+
+    pub fn get_prices(&self) -> Promise {
+        let gas: Gas = Gas(50_000_000_000_000);
+
+        ext_price_oracle::ext(self.oracle_id.clone())
+            .with_static_gas(gas)
+            .get_price_data(Some(vec![
+                "wrap.testnet".to_string(),
+                "usdt.fakes.testnet".to_string(),
+            ]))
+            .then(Self::ext(env::current_account_id()).get_price_callback())
+    }
+
+    #[private]
+    pub fn get_price_callback(&mut self, #[callback] data: PriceData) -> PriceData {
+        self.price_data = Some(data.clone());
+        data
+    }
+
+    pub fn get_latest_price(&self) -> PriceData {
+        return self.price_data.clone().unwrap();
     }
 }
 
