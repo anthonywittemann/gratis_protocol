@@ -1,0 +1,3 @@
+[target.wasm32-unknown-uknown]
+rustflags = ["C", "link-args=-s"]
+
