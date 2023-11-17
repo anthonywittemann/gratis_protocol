@@ -51,36 +51,13 @@ impl FungibleTokenReceiver for LendingProtocol {
         amount: U128,
         msg: String,
     ) -> PromiseOrValue<U128> {
-        // // Empty message is used for stable coin depositing.
-
-        // let _token_id = env::predecessor_account_id();
-
-        // // Update Borrowed Balance
-        // let mut loan: &mut Loan = self
-        //     .loans
-        //     .get_mut(&sender_id)
-        //     .expect("No collateral deposited");
-
-        // // Handle transfer case when it is more than the borrowed amount
-        // assert!(amount.le(&loan.borrowed.into()));
-
-        // // let collateral_value: Balance = loan.collateral * price;
-
-        // loan.borrowed = loan.borrowed - amount.0;
-
-        // // TODO: Handle case to close the loan
-        // if msg == "close" && loan.borrowed == 0 {
-        //     log!("Close the Loan");
-        //     let collateral = loan.collateral;
-        //     log!("Collateral: {}", collateral);
-        //     log!("Send back: {}", collateral - SAFE_GAS);
-        //     // gratis.transfer(collateral);
-        //     Promise::new(sender_id.clone()).transfer(collateral - SAFE_GAS);
-        //     loan.collateral = 0;
-        //     self.loans.remove(&sender_id);
-        // }
-
+        // update loan information
         self.repay(sender_id, amount.0);
+
+        // close loan if requested
+        if msg == "close" {
+            self.close();
+        }
 
         PromiseOrValue::Value(U128(0))
     }
@@ -344,6 +321,24 @@ mod tests {
         testing_env!(builder.build());
     }
 
+    fn are_vectors_equal(vec1: Vec<AccountId>, vec2: Vec<AccountId>) {
+        assert_eq!(vec1.len(), vec2.len(), "Vectors have different lengths");
+
+        let count_occurrences = |vec: Vec<AccountId>| -> HashMap<AccountId, usize> {
+            let mut map = HashMap::new();
+            for item in vec {
+                *map.entry(item).or_insert(0) += 1;
+            }
+            map
+        };
+
+        assert_eq!(
+            count_occurrences(vec1.clone()),
+            count_occurrences(vec2.clone()),
+            "Vectors have the same length but contain different values"
+        );
+    }
+
     #[test]
     pub fn initialize() {
         let a: AccountId = "alice.near".parse().unwrap();
@@ -356,33 +351,8 @@ mod tests {
     }
 
     #[test]
-    pub fn test_get_usdt() {
-        let a: AccountId = "alice.near".parse().unwrap();
-        let v: Vec<AccountId> = vec![a.clone()];
-        testing_env!(VMContextBuilder::new()
-            .predecessor_account_id(a.clone())
-            .build());
-
-        let contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
-        let usdt_amount: Balance = 100;
-        let p = contract.get_prices();
-        // let result = contract.get_usdt_callback(); // Replace with actual callback method
-        // println!("{:?}", result.prices.first().unwrap().price);
-
-        // assert_eq!(result.prices.into(), 100);
-        // let otherp: Promise = Promise::new(a.clone());
-        // println!("{:?}", contract.price_data.unwrap().timestamp.to_string());
-        // println!("{:?}", p.timestamp);
-        // assert_eq!(p, otherp);
-
-        // assert_eq!(contract.oracle_id, "price_oracle.testnet".parse().unwrap())
-    }
-
-    #[test]
     pub fn test_borrow() {
         let a: AccountId = "alice.near".parse().unwrap();
-        let bob: AccountId = "bob.near".parse().unwrap();
-        let v: Vec<AccountId> = vec![a.clone()];
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(a.clone())
             .signer_account_id(a.clone())
@@ -409,8 +379,7 @@ mod tests {
     #[test]
     pub fn test_repay() {
         let a: AccountId = "alice.near".parse().unwrap();
-        let bob: AccountId = "bob.near".parse().unwrap();
-        let v: Vec<AccountId> = vec![a.clone()];
+
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(a.clone())
             .signer_account_id(a.clone())
@@ -441,8 +410,7 @@ mod tests {
     #[test]
     pub fn test_remove_collateral() {
         let a: AccountId = "alice.near".parse().unwrap();
-        let bob: AccountId = "bob.near".parse().unwrap();
-        let v: Vec<AccountId> = vec![a.clone()];
+
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(a.clone())
             .signer_account_id(a.clone())
@@ -472,8 +440,6 @@ mod tests {
     #[test]
     pub fn close_loan() {
         let a: AccountId = "alice.near".parse().unwrap();
-        let bob: AccountId = "bob.near".parse().unwrap();
-        let v: Vec<AccountId> = vec![a.clone()];
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(a.clone())
             .signer_account_id(a.clone())
@@ -482,7 +448,6 @@ mod tests {
         let mut contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
         let collateral_amount: Balance = 1 * ONE_NEAR;
         let borrow_amount: Balance = 50;
-        let fee: u128 = collateral_amount / 200;
 
         // assert_eq!(env::account_balance(), 50);
 
@@ -504,5 +469,35 @@ mod tests {
 
         assert_eq!(contract.loans.len(), 0);
         // assert_eq!(env::account_balance(), 1000 * ONE_NEAR - fee);
+    }
+
+    #[test]
+    pub fn open_multiple_loans() {
+        let a: AccountId = "alice.near".parse().unwrap();
+        let bob: AccountId = "bob.near".parse().unwrap();
+        let v: Vec<AccountId> = vec![bob.clone(), a.clone()];
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(a.clone())
+            .signer_account_id(a.clone())
+            .build());
+
+        let mut contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
+        let collateral_amount: Balance = 1 * ONE_NEAR;
+
+        set_context("alice.near", collateral_amount);
+        contract.deposit_collateral();
+
+        set_context("bob.near", collateral_amount);
+        contract.deposit_collateral();
+
+        let mut loan_accounts: Vec<AccountId> = Vec::new();
+        let loans = contract.get_all_loans();
+        for (key, value) in loans {
+            println!("Loan: {}: {}", key.clone(), value.borrowed);
+            loan_accounts.push(key);
+        }
+
+        are_vectors_equal(loan_accounts, v);
+        assert_eq!(contract.loans.len(), 2);
     }
 }
