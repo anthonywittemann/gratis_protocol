@@ -51,34 +51,36 @@ impl FungibleTokenReceiver for LendingProtocol {
         amount: U128,
         msg: String,
     ) -> PromiseOrValue<U128> {
-        // Empty message is used for stable coin depositing.
+        // // Empty message is used for stable coin depositing.
 
-        let _token_id = env::predecessor_account_id();
+        // let _token_id = env::predecessor_account_id();
 
-        // Update Borrowed Balance
-        let mut loan: &mut Loan = self
-            .loans
-            .get_mut(&sender_id)
-            .expect("No collateral deposited");
+        // // Update Borrowed Balance
+        // let mut loan: &mut Loan = self
+        //     .loans
+        //     .get_mut(&sender_id)
+        //     .expect("No collateral deposited");
 
-        // Handle transfer case when it is more than the borrowed amount
-        assert!(amount.le(&loan.borrowed.into()));
+        // // Handle transfer case when it is more than the borrowed amount
+        // assert!(amount.le(&loan.borrowed.into()));
 
-        // let collateral_value: Balance = loan.collateral * price;
+        // // let collateral_value: Balance = loan.collateral * price;
 
-        loan.borrowed = loan.borrowed - amount.0;
+        // loan.borrowed = loan.borrowed - amount.0;
 
-        // TODO: Handle case to close the loan
-        if msg == "close" && loan.borrowed == 0 {
-            log!("Close the Loan");
-            let collateral = loan.collateral;
-            log!("Collateral: {}", collateral);
-            log!("Send back: {}", collateral - SAFE_GAS);
-            // gratis.transfer(collateral);
-            Promise::new(sender_id.clone()).transfer(collateral - SAFE_GAS);
-            loan.collateral = 0;
-            self.loans.remove(&sender_id);
-        }
+        // // TODO: Handle case to close the loan
+        // if msg == "close" && loan.borrowed == 0 {
+        //     log!("Close the Loan");
+        //     let collateral = loan.collateral;
+        //     log!("Collateral: {}", collateral);
+        //     log!("Send back: {}", collateral - SAFE_GAS);
+        //     // gratis.transfer(collateral);
+        //     Promise::new(sender_id.clone()).transfer(collateral - SAFE_GAS);
+        //     loan.collateral = 0;
+        //     self.loans.remove(&sender_id);
+        // }
+
+        self.repay(sender_id, amount.0);
 
         PromiseOrValue::Value(U128(0))
     }
@@ -107,17 +109,16 @@ impl LendingProtocol {
         }
     }
 
+    // Deposit collateral function allows the user to deposit the collateral to the contract. Creates a Loan if the user doesn't have a loan
     #[payable]
     pub fn deposit_collateral(&mut self) -> bool {
         let deposit = env::attached_deposit();
         let mut fee = deposit / 200; // 0.5% fee
-        let mut amount = deposit * ONE_NEAR;
-        // assert!(
-        //     deposit == amount,
-        //     "Attached deposit is not equal to the amount"
-        // );
-        fee = fee * ONE_NEAR;
+        let mut amount = deposit;
+
+        fee = fee;
         amount -= fee;
+        let col = deposit - fee;
 
         assert!(amount > 0, "Deposit Amount should be greater than 0");
 
@@ -132,10 +133,11 @@ impl LendingProtocol {
             },
         });
 
-        loan.collateral += deposit;
+        loan.collateral += col;
         true
     }
 
+    // Remove collateral function allows the user to withdraw the collateral from the contract
     pub fn remove_collateral(&mut self, amount: Balance) -> bool {
         let account_id = env::predecessor_account_id();
         let loan: &mut Loan = self
@@ -147,19 +149,34 @@ impl LendingProtocol {
 
         assert!(
             loan.collateral >= amount,
-            "Withdraw Amount should be less than the deposited amount"
+            "Withdraw Amount should be less than the deposited amount. Loan Collateral: {}, Amount: {}", loan.collateral, amount 
         );
 
         assert!(
-            MIN_COLLATERAL_RATIO > 100 * (loan.borrowed / loan.collateral - amount),
+            MIN_COLLATERAL_RATIO > 100 * (loan.borrowed / (loan.collateral - amount)),
             "Collateral ratio should be greater than 120%"
         );
 
+        Promise::new(account_id.clone()).transfer(amount);
         loan.collateral -= amount;
         true
     }
 
-    #[payable]
+    // Close function calculates the difference between loan and collateral and returns the difference to the user
+    pub fn close(&mut self) {
+        let predecessor_account_id: AccountId = env::predecessor_account_id();
+        let loan = self.loans.get_mut(&predecessor_account_id).unwrap();
+        let collateral = loan.collateral;
+        let borrowed = loan.borrowed;
+
+        let additional_collateral = collateral - borrowed;
+        if additional_collateral > 0 {
+            Promise::new(predecessor_account_id.clone()).transfer(additional_collateral);
+        }
+        // remove loans
+        self.loans.remove(&predecessor_account_id);
+    }
+
     pub fn borrow(&mut self, usdt_amount: u128) {
         /*S
            1. Calculate the collateral value
@@ -237,15 +254,8 @@ impl LendingProtocol {
         }
     }
 
-    pub fn close(&mut self, collateral: Balance, sender_id: AccountId) {
-        let loan = self.loans.get_mut(&sender_id).unwrap();
-        if loan.borrowed == 0 {
-            Promise::new(sender_id.clone()).transfer(collateral * ONE_NEAR);
-        }
-    }
-
     // The "repay" method calculates the actual repayment amount and the refund amount based on the outstanding loan. If there's an overpayment, it will refund the excess amount to the user.
-    pub fn repay(&mut self, usdt_amount: u128) -> Option<Promise> {
+    pub fn repay(&mut self, account_id: AccountId, usdt_amount: u128) -> Option<Promise> {
         /*
           1. Calculate the collateral value
           2. Calculate current loaned value
@@ -256,13 +266,13 @@ impl LendingProtocol {
 
         assert!(usdt_amount > 0, "Repay Amount should be greater than 0");
 
-        let predecessor_account_id: AccountId = env::predecessor_account_id();
+        // let predecessor_account_id: AccountId = env::predecessor_account_id();
 
         let price = self.get_latest_price().prices[0].price.unwrap();
 
         let loan: &mut Loan = self
             .loans
-            .get_mut(&predecessor_account_id)
+            .get_mut(&account_id)
             .expect("No collateral deposited");
         // get the latest price NEAR in USDT of the collateral asset
 
@@ -415,7 +425,9 @@ mod tests {
         contract.deposit_collateral();
 
         contract.borrow(borrow_amount);
-        contract.repay(50);
+
+        // Need to import Stable Coin contract and do a transfer
+        contract.repay(a.clone(), 50);
 
         let loans = contract.get_all_loans();
         for (key, value) in &loans {
@@ -424,5 +436,73 @@ mod tests {
 
         let loan = contract.loans.get(&a).unwrap();
         assert_eq!(loan.borrowed, MIN_COLLATERAL_VALUE);
+    }
+
+    #[test]
+    pub fn test_remove_collateral() {
+        let a: AccountId = "alice.near".parse().unwrap();
+        let bob: AccountId = "bob.near".parse().unwrap();
+        let v: Vec<AccountId> = vec![a.clone()];
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(a.clone())
+            .signer_account_id(a.clone())
+            .build());
+
+        let mut contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
+        let collateral_amount: Balance = 10000;
+        let borrow_amount: Balance = 50;
+        let fee: u128 = collateral_amount / 200;
+
+        set_context("alice.near", collateral_amount);
+
+        contract.deposit_collateral();
+        contract.borrow(borrow_amount);
+        contract.remove_collateral(5000);
+
+        let loans = contract.get_all_loans();
+        for (key, value) in &loans {
+            println!("Loan: {}: {}", key, value.borrowed);
+        }
+
+        let loan = contract.loans.get(&a).unwrap();
+        assert_eq!(loan.borrowed, borrow_amount);
+        assert_eq!(loan.collateral, collateral_amount - 5000 - fee);
+    }
+
+    #[test]
+    pub fn close_loan() {
+        let a: AccountId = "alice.near".parse().unwrap();
+        let bob: AccountId = "bob.near".parse().unwrap();
+        let v: Vec<AccountId> = vec![a.clone()];
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(a.clone())
+            .signer_account_id(a.clone())
+            .build());
+
+        let mut contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
+        let collateral_amount: Balance = 1 * ONE_NEAR;
+        let borrow_amount: Balance = 50;
+        let fee: u128 = collateral_amount / 200;
+
+        // assert_eq!(env::account_balance(), 50);
+
+        set_context("alice.near", collateral_amount);
+
+        // assert_eq!(env::account_balance(), 99);
+
+        contract.deposit_collateral();
+
+        //assert_eq!(env::account_balance(), 100);
+
+        contract.borrow(borrow_amount);
+        contract.close();
+
+        let loans = contract.get_all_loans();
+        for (key, value) in &loans {
+            println!("Loan: {}: {}", key, value.borrowed);
+        }
+
+        assert_eq!(contract.loans.len(), 0);
+        // assert_eq!(env::account_balance(), 1000 * ONE_NEAR - fee);
     }
 }
