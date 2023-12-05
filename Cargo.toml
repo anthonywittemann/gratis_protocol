@@ -7,14 +7,13 @@ edition = "2021"
 name = "gratis_protocol"
 crate-type = ["cdylib"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 near-contract-standards = "4.1.1"
 near-sdk = "4.1.1"
 uint = { version = "0.9.3", default-features = false }
-rand = "0.8.4"
 
+[dev-dependencies]
+rand = "0.8.4"
 
 [profile.release]
 codegen-units = 1
@@ -23,6 +22,3 @@ lto = true
 debug = false
 panic = "abort"
 overflow-checks = true
-
-[workspace]
-members = []
