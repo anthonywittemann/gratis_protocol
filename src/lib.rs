@@ -81,7 +81,7 @@ impl LendingProtocol {
         Self {
             loans: HashMap::new(),
             lower_collateral_accounts: lower_collateral_accounts.into_iter().collect(),
-            oracle_id: AccountId::from_str(&PRICE_ORACLE_CONTRACT_ID).unwrap(),
+            oracle_id: AccountId::from_str(PRICE_ORACLE_CONTRACT_ID).unwrap(),
             price_data: Some(PriceData::default()),
         }
     }
@@ -90,10 +90,10 @@ impl LendingProtocol {
     #[payable]
     pub fn deposit_collateral(&mut self) -> bool {
         let deposit = env::attached_deposit();
-        let mut fee = deposit / 200; // 0.5% fee
+        let fee = deposit / 200; // 0.5% fee
         let mut amount = deposit;
 
-        fee = fee;
+        // fee = fee; // FIXME: What is this supposed to do?
         amount -= fee;
         let col = deposit - fee;
 
@@ -199,9 +199,7 @@ impl LendingProtocol {
         // get max borrowable amount
         let total_max_borrowable_amount: u128 = 100u128 * collateral_value / loan.collateral_ratio;
 
-        let max_borrowable_amount = total_max_borrowable_amount
-            .checked_sub(borrowed_value)
-            .unwrap_or(0);
+        let max_borrowable_amount = total_max_borrowable_amount.saturating_sub(borrowed_value);
 
         log!("max_borrowable_amount: {}", max_borrowable_amount);
         log!("usdt_amount: {}", usdt_amount);
@@ -211,7 +209,7 @@ impl LendingProtocol {
         if usdt_amount <= max_borrowable_amount {
             // borrow the requested amount
             let usdt_contract_account_id: AccountId =
-                AccountId::from_str(USDT_CONTRACT_ID.clone()).unwrap();
+                AccountId::from_str(USDT_CONTRACT_ID).unwrap();
             loan.borrowed += usdt_amount;
             Promise::new(usdt_contract_account_id).function_call(
                 "ft_transfer".to_string(),
@@ -280,7 +278,7 @@ impl LendingProtocol {
     -------------------------------------------------------------------------------------- */
 
     pub fn get_all_loans(&self) -> HashMap<AccountId, Loan> {
-        return self.loans.clone();
+        self.loans.clone()
     }
 
     pub fn get_prices(&self) -> Promise {
@@ -302,7 +300,7 @@ impl LendingProtocol {
     }
 
     pub fn get_latest_price(&self) -> PriceData {
-        return self.price_data.clone().unwrap();
+        self.price_data.clone().unwrap()
     }
 }
 
@@ -446,7 +444,7 @@ mod tests {
             .build());
 
         let mut contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
-        let collateral_amount: Balance = 1 * ONE_NEAR;
+        let collateral_amount: Balance = ONE_NEAR;
         let borrow_amount: Balance = 50;
 
         // assert_eq!(env::account_balance(), 50);
@@ -482,7 +480,7 @@ mod tests {
             .build());
 
         let mut contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
-        let collateral_amount: Balance = 1 * ONE_NEAR;
+        let collateral_amount: Balance = ONE_NEAR;
 
         set_context("alice.near", collateral_amount);
         contract.deposit_collateral();
