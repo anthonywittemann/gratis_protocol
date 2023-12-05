@@ -67,11 +67,6 @@ impl FungibleTokenReceiver for LendingProtocol {
 impl LendingProtocol {
     #[init]
     pub fn new(lower_collateral_accounts: Vec<AccountId>) -> Self {
-        assert!(
-            env::state_read::<Self>().is_none(),
-            "Contract is already initialized"
-        );
-
         assert_eq!(
             env::predecessor_account_id(),
             env::current_account_id(),
