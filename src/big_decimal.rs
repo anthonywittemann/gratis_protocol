@@ -1,12 +1,18 @@
-use crate::*;
-use near_sdk::borsh::maybestd::io::Write;
-use near_sdk::json_types::U128;
-use near_sdk::serde::Serializer;
+#![allow(clippy::assign_op_pattern)]
+
+use near_sdk::{
+    borsh::{maybestd::io::Write, BorshDeserialize, BorshSerialize},
+    json_types::U128,
+    serde::{Deserialize, Serialize, Serializer},
+    Balance,
+};
 use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
 use std::ops::{Add, Div, Mul, Sub};
 #[cfg(not(target_arch = "wasm32"))]
 use std::str::FromStr;
+
+use crate::external::Price;
 
 uint::construct_uint!(
     pub struct U256(4);
@@ -38,9 +44,9 @@ impl Display for BigDecimal {
         let a = self.0 / U384::from(BIG_DIVISOR);
         let b = (self.0 - a * U384::from(BIG_DIVISOR)).as_u128();
         if b > 0 {
-            write!(f, "{}", format!("{}.{:027}", a, b).trim_end_matches('0'))
+            write!(f, "{}", format!("{a}.{b:027}").trim_end_matches('0'))
         } else {
-            write!(f, "{}.0", a)
+            write!(f, "{a}.0")
         }
     }
 }
@@ -48,12 +54,12 @@ impl Display for BigDecimal {
 #[cfg(not(target_arch = "wasm32"))]
 impl std::fmt::Debug for BigDecimal {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{self}")
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-const PARSE_INT_ERROR: &'static str = "Parse int error";
+const PARSE_INT_ERROR: &str = "Parse int error";
 
 #[cfg(not(target_arch = "wasm32"))]
 impl FromStr for BigDecimal {
@@ -73,7 +79,7 @@ impl FromStr for BigDecimal {
         } else {
             (s, 0u128)
         };
-        let int = U384::from_str(&int).map_err(|_| PARSE_INT_ERROR)?;
+        let int = U384::from_str(int).map_err(|_| PARSE_INT_ERROR)?;
         if dec >= BIG_DIVISOR {
             return Err(String::from("The decimal part is too large"));
         }
@@ -99,7 +105,7 @@ impl<'de> Deserialize<'de> for BigDecimal {
         D: near_sdk::serde::Deserializer<'de>,
     {
         let s: String = Deserialize::deserialize(deserializer)?;
-        Ok(Self::from_str(&s).map_err(|err| near_sdk::serde::de::Error::custom(err))?)
+        Self::from_str(&s).map_err(near_sdk::serde::de::Error::custom)
     }
 }
 
@@ -177,7 +183,7 @@ impl From<BigDecimal> for LowU128 {
 
 impl BigDecimal {
     pub fn from_ratio(ratio: u32) -> Self {
-        Self(U384::from(ratio) * U384::from(BIG_DIVISOR / (MAX_RATIO as u128)))
+        Self(U384::from(ratio) * U384::from(BIG_DIVISOR / u128::from(MAX_RATIO)))
     }
 
     pub fn mul_ratio(&self, ratio: u32) -> Self {
