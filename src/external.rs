@@ -19,7 +19,7 @@ pub struct AssetPrice {
     pub price: Price,
 }
 
-#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone)]
+#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "near_sdk::serde")]
 pub struct AssetOptionalPrice {
     pub asset_id: AssetId,
@@ -35,7 +35,7 @@ pub struct Price {
     pub decimals: u8,
 }
 
-#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone)]
+#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "near_sdk::serde")]
 pub struct PriceData {
     #[serde(with = "u64_dec_format")]
@@ -50,13 +50,22 @@ impl Default for PriceData {
         Self {
             timestamp: 1,            // default value for timestamp
             recency_duration_sec: 1, // default value for recency_duration_sec
-            prices: vec![AssetOptionalPrice {
-                asset_id: "wrap.testnet".to_string(),
-                price: Some(Price {
-                    multiplier: 15000, // default value for multiplier
-                    decimals: 6,       // default value for decimals
-                }),
-            }], // default value for prices
+            prices: vec![
+                AssetOptionalPrice {
+                    asset_id: "wrap.testnet".to_string(),
+                    price: Some(Price {
+                        multiplier: 15000, // default value for multiplier
+                        decimals: 6,       // default value for decimals
+                    }),
+                },
+                AssetOptionalPrice {
+                    asset_id: "usdt.fakes.testnet".to_string(),
+                    price: Some(Price {
+                        multiplier: 10000,
+                        decimals: 10,
+                    }),
+                },
+            ], // default value for prices
         }
     }
 }

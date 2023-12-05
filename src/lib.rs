@@ -5,6 +5,7 @@ pub mod oracle;
 use crate::big_decimal::BigDecimal;
 use crate::external::{ext_price_oracle, PriceData};
 
+use external::Price;
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
 use near_sdk::{
     borsh::{
@@ -30,14 +31,33 @@ pub const GAS_FOR_FT_TRANSFER: Gas = Gas(50_000_000_000_000);
 pub const SAFE_GAS: Balance = 50_000_000_000_000;
 pub const MIN_COLLATERAL_VALUE: u128 = 100;
 
+#[derive(BorshDeserialize, BorshSerialize, Deserialize, Serialize, Clone, Debug)]
+#[serde(crate = "near_sdk::serde")]
+pub struct Asset {
+    pub contract_id: Option<AccountId>,
+    pub oracle_asset_id: String,
+    pub last_price: Option<Price>,
+}
+
+impl Asset {
+    pub fn new(contract_id: Option<AccountId>, oracle_asset_id: String) -> Self {
+        Self {
+            contract_id,
+            oracle_asset_id,
+            last_price: None,
+        }
+    }
+}
+
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, PanicOnDefault)]
 #[serde(crate = "near_sdk::serde")]
 pub struct LendingProtocol {
-    pub loans: HashMap<AccountId, Loan>,
+    pub loans: HashMap<AccountId, Loan>, // TODO: near-sdk::store collections
     pub lower_collateral_accounts: HashSet<AccountId>,
     pub oracle_id: AccountId,
-    pub price_data: Option<PriceData>,
+    pub collateral_asset: Asset,
+    pub loan_asset: Asset,
 }
 
 #[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone, Copy)]
@@ -71,18 +91,20 @@ impl FungibleTokenReceiver for LendingProtocol {
 #[near_bindgen]
 impl LendingProtocol {
     #[init]
-    pub fn new(lower_collateral_accounts: Vec<AccountId>) -> Self {
-        assert_eq!(
-            env::predecessor_account_id(),
-            env::current_account_id(),
-            "Only contract owner can call this method"
-        );
-
+    #[private]
+    pub fn new(
+        lower_collateral_accounts: Vec<AccountId>,
+        collateral_asset_id: Option<AccountId>,
+        collateral_oracle_asset_id: String,
+        loan_asset_id: AccountId,
+        loan_oracle_asset_id: String,
+    ) -> Self {
         Self {
             loans: HashMap::new(),
             lower_collateral_accounts: lower_collateral_accounts.into_iter().collect(),
             oracle_id: AccountId::from_str(PRICE_ORACLE_CONTRACT_ID).unwrap(),
-            price_data: Some(PriceData::default()),
+            collateral_asset: Asset::new(collateral_asset_id, collateral_oracle_asset_id),
+            loan_asset: Asset::new(Some(loan_asset_id), loan_oracle_asset_id),
         }
     }
 
@@ -169,7 +191,7 @@ impl LendingProtocol {
         log!("predecessor_account_id: {}", account_id);
 
         // Get NEAR Price
-        let price = self.get_latest_price().prices[0].price.unwrap();
+        let price = self.collateral_asset.last_price.unwrap();
 
         let near_usdt_price: u128 = price.multiplier / 10000;
         log!("price: {}", price.multiplier);
@@ -243,7 +265,7 @@ impl LendingProtocol {
 
         // let predecessor_account_id: AccountId = env::predecessor_account_id();
 
-        let price = self.get_latest_price().prices[0].price.unwrap();
+        let price = self.collateral_asset.last_price.unwrap();
 
         let loan: &mut Loan = self
             .loans
@@ -287,20 +309,32 @@ impl LendingProtocol {
         ext_price_oracle::ext(self.oracle_id.clone())
             .with_static_gas(gas)
             .get_price_data(Some(vec![
-                "wrap.testnet".to_string(),
-                "usdt.fakes.testnet".to_string(),
+                self.collateral_asset.oracle_asset_id.clone(),
+                self.loan_asset.oracle_asset_id.clone(),
             ]))
             .then(Self::ext(env::current_account_id()).get_price_callback())
     }
 
     #[private]
     pub fn get_price_callback(&mut self, #[callback] data: PriceData) -> PriceData {
-        self.price_data = Some(data.clone());
-        data
-    }
+        match &data.prices[..] {
+            [collateral_asset_price, loan_asset_price]
+                if collateral_asset_price.asset_id == self.collateral_asset.oracle_asset_id
+                    && loan_asset_price.asset_id == self.loan_asset.oracle_asset_id =>
+            {
+                if let Some(price) = collateral_asset_price.price {
+                    self.collateral_asset.last_price.replace(price);
+                }
+                if let Some(price) = loan_asset_price.price {
+                    self.loan_asset.last_price.replace(price);
+                }
+            }
+            _ => env::panic_str(&format!("Invalid price data returned by oracle: {data:?}")),
+        }
 
-    pub fn get_latest_price(&self) -> PriceData {
-        self.price_data.clone().unwrap()
+        // TODO: Something with the timestamp/recency data
+
+        data
     }
 }
 
@@ -337,6 +371,16 @@ mod tests {
         );
     }
 
+    fn init_sane_defaults(lower_collateral_accounts: Vec<AccountId>) -> LendingProtocol {
+        LendingProtocol::new(
+            lower_collateral_accounts,
+            None,
+            "wrap.testnet".to_string(),
+            "usdt.fakes.testnet".parse().unwrap(),
+            "usdt.fakes.testnet".to_string(),
+        )
+    }
+
     #[test]
     pub fn initialize() {
         let a: AccountId = "alice.near".parse().unwrap();
@@ -344,7 +388,7 @@ mod tests {
         testing_env!(VMContextBuilder::new()
             .predecessor_account_id(a.clone())
             .build());
-        let contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
+        let contract: LendingProtocol = init_sane_defaults(vec![a.clone()]);
         assert_eq!(contract.oracle_id, "priceoracle.testnet".parse().unwrap())
     }
 
@@ -356,7 +400,8 @@ mod tests {
             .signer_account_id(a.clone())
             .build());
 
-        let mut contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
+        let mut contract: LendingProtocol = init_sane_defaults(vec![a.clone()]);
+        contract.get_price_callback(PriceData::default()); // mock oracle results
         let collateral_amount: Balance = 10000;
         let borrow_amount: Balance = 50;
 
@@ -383,7 +428,8 @@ mod tests {
             .signer_account_id(a.clone())
             .build());
 
-        let mut contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
+        let mut contract: LendingProtocol = init_sane_defaults(vec![a.clone()]);
+        contract.get_price_callback(PriceData::default()); // mock oracle results
         let collateral_amount: Balance = 10000;
         let borrow_amount: Balance = 150;
 
@@ -414,7 +460,8 @@ mod tests {
             .signer_account_id(a.clone())
             .build());
 
-        let mut contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
+        let mut contract: LendingProtocol = init_sane_defaults(vec![a.clone()]);
+        contract.get_price_callback(PriceData::default()); // mock oracle results
         let collateral_amount: Balance = 10000;
         let borrow_amount: Balance = 50;
         let fee: u128 = collateral_amount / 200;
@@ -443,9 +490,10 @@ mod tests {
             .signer_account_id(a.clone())
             .build());
 
-        let mut contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
+        let mut contract: LendingProtocol = init_sane_defaults(vec![a.clone()]);
         let collateral_amount: Balance = ONE_NEAR;
         let borrow_amount: Balance = 50;
+        contract.get_price_callback(PriceData::default()); // mock oracle results
 
         // assert_eq!(env::account_balance(), 50);
 
@@ -479,7 +527,7 @@ mod tests {
             .signer_account_id(a.clone())
             .build());
 
-        let mut contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
+        let mut contract: LendingProtocol = init_sane_defaults(vec![a.clone()]);
         let collateral_amount: Balance = ONE_NEAR;
 
         set_context("alice.near", collateral_amount);
