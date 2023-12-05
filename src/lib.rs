@@ -2,16 +2,22 @@ pub mod big_decimal;
 pub mod external;
 pub mod oracle;
 
-use crate::big_decimal::*;
-use crate::external::*;
+use crate::big_decimal::BigDecimal;
+use crate::external::{ext_price_oracle, PriceData};
 
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
-use near_sdk::borsh::maybestd::collections::{HashMap, HashSet};
-use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::json_types::U128;
-use near_sdk::serde::{Deserialize, Serialize};
-use near_sdk::PromiseOrValue;
-use near_sdk::{env, log, near_bindgen, AccountId, Balance, Gas, PanicOnDefault, Promise};
+use near_sdk::{
+    borsh::{
+        self,
+        maybestd::collections::{HashMap, HashSet},
+        BorshDeserialize, BorshSerialize,
+    },
+    env,
+    json_types::U128,
+    log, near_bindgen,
+    serde::{Deserialize, Serialize},
+    AccountId, Balance, Gas, PanicOnDefault, Promise, PromiseOrValue,
+};
 use std::str::FromStr;
 
 // CONSTANTS
@@ -20,7 +26,6 @@ const USDT_CONTRACT_ID: &str = "usdt.fakes.testnet"; // TODO: update with testne
 const PRICE_ORACLE_CONTRACT_ID: &str = "priceoracle.testnet";
 const MIN_COLLATERAL_RATIO: u128 = 120;
 const LOWER_COLLATERAL_RATIO: u128 = 105;
-pub const ONE_NEAR: Balance = 1_000_000_000_000_000_000_000_000;
 pub const GAS_FOR_FT_TRANSFER: Gas = Gas(50_000_000_000_000);
 pub const SAFE_GAS: Balance = 50_000_000_000_000;
 pub const MIN_COLLATERAL_VALUE: u128 = 100;
@@ -52,7 +57,7 @@ impl FungibleTokenReceiver for LendingProtocol {
         msg: String,
     ) -> PromiseOrValue<U128> {
         // update loan information
-        self.repay(sender_id, amount.0);
+        self.repay(&sender_id, amount.0);
 
         // close loan if requested
         if msg == "close" {
@@ -121,7 +126,7 @@ impl LendingProtocol {
 
         assert!(
             loan.collateral >= amount,
-            "Withdraw Amount should be less than the deposited amount. Loan Collateral: {}, Amount: {}", loan.collateral, amount 
+            "Withdraw Amount should be less than the deposited amount. Loan Collateral: {}, Amount: {}", loan.collateral, amount
         );
 
         assert!(
@@ -150,7 +155,7 @@ impl LendingProtocol {
     }
 
     pub fn borrow(&mut self, usdt_amount: u128) {
-        /*S
+        /*
            1. Calculate the collateral value
            1a. Calculate current loan value
            2. Calculate max borrowable amount
@@ -225,7 +230,7 @@ impl LendingProtocol {
     }
 
     // The "repay" method calculates the actual repayment amount and the refund amount based on the outstanding loan. If there's an overpayment, it will refund the excess amount to the user.
-    pub fn repay(&mut self, account_id: AccountId, usdt_amount: u128) -> Option<Promise> {
+    pub fn repay(&mut self, account_id: &AccountId, usdt_amount: u128) -> Option<Promise> {
         /*
           1. Calculate the collateral value
           2. Calculate current loaned value
@@ -242,12 +247,12 @@ impl LendingProtocol {
 
         let loan: &mut Loan = self
             .loans
-            .get_mut(&account_id)
+            .get_mut(account_id)
             .expect("No collateral deposited");
         // get the latest price NEAR in USDT of the collateral asset
 
         // Calculate collateral and borrowed value
-        let _collateral_value: u128 =
+        let collateral_value: u128 =
             BigDecimal::round_u128(&BigDecimal::from_balance_price(loan.collateral, &price, 0));
 
         let borrowed_value: u128 = loan.borrowed;
@@ -256,13 +261,13 @@ impl LendingProtocol {
         if usdt_amount + MIN_COLLATERAL_VALUE <= borrowed_value {
             loan.borrowed -= usdt_amount;
             // Recalculate collateral ratio
-            loan.collateral_ratio = _collateral_value / loan.borrowed;
+            loan.collateral_ratio = collateral_value / loan.borrowed;
             // Fix return
             None
         } else {
             // They overpaid. Protocol will return the full collateral in NEAR
             loan.borrowed = MIN_COLLATERAL_VALUE;
-            loan.collateral_ratio = _collateral_value / loan.borrowed;
+            loan.collateral_ratio = collateral_value / loan.borrowed;
             None
             // Some(Promise::new(predecessor_account_id.clone()).transfer(collateral_to_return))
         }
@@ -303,7 +308,7 @@ impl LendingProtocol {
 mod tests {
     use super::*;
 
-    use near_sdk::{test_utils::VMContextBuilder, testing_env, AccountId};
+    use near_sdk::{test_utils::VMContextBuilder, testing_env, AccountId, ONE_NEAR};
 
     // Auxiliar fn: create a mock context
     fn set_context(predecessor: &str, amount: Balance) {
@@ -389,7 +394,7 @@ mod tests {
         contract.borrow(borrow_amount);
 
         // Need to import Stable Coin contract and do a transfer
-        contract.repay(a.clone(), 50);
+        contract.repay(&a, 50);
 
         let loans = contract.get_all_loans();
         for (key, value) in &loans {
