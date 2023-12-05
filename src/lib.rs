@@ -6,7 +6,9 @@ use crate::big_decimal::BigDecimal;
 use crate::external::{ext_price_oracle, PriceData};
 
 use external::Price;
+use near_contract_standards::fungible_token::core::ext_ft_core;
 use near_contract_standards::fungible_token::receiver::FungibleTokenReceiver;
+use near_sdk::require;
 use near_sdk::{
     borsh::{
         self,
@@ -19,11 +21,11 @@ use near_sdk::{
     serde::{Deserialize, Serialize},
     AccountId, Balance, Gas, PanicOnDefault, Promise, PromiseOrValue,
 };
+use std::ops::Mul;
 use std::str::FromStr;
 
 // CONSTANTS
-const USDT_CONTRACT_ID: &str = "usdt.fakes.testnet"; // TODO: update with testnet address
-                                                     // const LENDING_CONTRACT_ID: &str = "gratis_protocol.testnet"; // TODO: update with testnet address
+// const LENDING_CONTRACT_ID: &str = "gratis_protocol.testnet"; // TODO: update with testnet address
 const PRICE_ORACLE_CONTRACT_ID: &str = "priceoracle.testnet";
 const MIN_COLLATERAL_RATIO: u128 = 120;
 const LOWER_COLLATERAL_RATIO: u128 = 105;
@@ -33,18 +35,60 @@ pub const MIN_COLLATERAL_VALUE: u128 = 100;
 
 #[derive(BorshDeserialize, BorshSerialize, Deserialize, Serialize, Clone, Debug)]
 #[serde(crate = "near_sdk::serde")]
-pub struct Asset {
-    pub contract_id: Option<AccountId>,
+pub struct ContractAsset {
+    pub contract_id: AccountId,
     pub oracle_asset_id: String,
     pub last_price: Option<Price>,
 }
 
-impl Asset {
-    pub fn new(contract_id: Option<AccountId>, oracle_asset_id: String) -> Self {
+impl ContractAsset {
+    pub fn new(contract_id: AccountId, oracle_asset_id: String) -> Self {
         Self {
             contract_id,
             oracle_asset_id,
             last_price: None,
+        }
+    }
+}
+
+/// Always representative of the native token (NEAR)
+#[derive(BorshDeserialize, BorshSerialize, Deserialize, Serialize, Clone, Debug)]
+#[serde(crate = "near_sdk::serde")]
+pub struct NativeAsset {
+    pub oracle_asset_id: String,
+    pub last_price: Option<Price>,
+}
+
+impl NativeAsset {
+    pub fn new(oracle_asset_id: String) -> Self {
+        Self {
+            oracle_asset_id,
+            last_price: None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize, Debug, Clone)]
+#[serde(crate = "near_sdk::serde")]
+pub struct Fraction {
+    numerator: U128,
+    denominator: U128,
+}
+
+impl<T: Into<U128>, U: Into<U128>> From<(T, U)> for Fraction {
+    fn from((numerator, denominator): (T, U)) -> Self {
+        Self {
+            numerator: numerator.into(),
+            denominator: denominator.into(),
+        }
+    }
+}
+
+impl Fraction {
+    pub fn new(numerator: U128, denominator: U128) -> Self {
+        Self {
+            numerator,
+            denominator,
         }
     }
 }
@@ -56,8 +100,19 @@ pub struct LendingProtocol {
     pub loans: HashMap<AccountId, Loan>, // TODO: near-sdk::store collections
     pub lower_collateral_accounts: HashSet<AccountId>,
     pub oracle_id: AccountId,
-    pub collateral_asset: Asset,
-    pub loan_asset: Asset,
+    pub collateral_asset: NativeAsset,
+    pub loan_asset: ContractAsset,
+    pub deposit_fee: Fraction,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(crate = "near_sdk::serde")]
+pub struct LendingProtocolConfiguration {
+    pub oracle_id: AccountId,
+    pub collateral_oracle_asset_id: String,
+    pub loan_asset_id: AccountId,
+    pub loan_oracle_asset_id: String,
+    pub deposit_fee: Fraction,
 }
 
 #[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone, Copy)]
@@ -94,17 +149,23 @@ impl LendingProtocol {
     #[private]
     pub fn new(
         lower_collateral_accounts: Vec<AccountId>,
-        collateral_asset_id: Option<AccountId>,
         collateral_oracle_asset_id: String,
         loan_asset_id: AccountId,
         loan_oracle_asset_id: String,
+        deposit_fee: Fraction,
     ) -> Self {
+        require!(
+            deposit_fee.numerator < deposit_fee.denominator,
+            "Invalid fee"
+        );
+
         Self {
             loans: HashMap::new(),
             lower_collateral_accounts: lower_collateral_accounts.into_iter().collect(),
             oracle_id: AccountId::from_str(PRICE_ORACLE_CONTRACT_ID).unwrap(),
-            collateral_asset: Asset::new(collateral_asset_id, collateral_oracle_asset_id),
-            loan_asset: Asset::new(Some(loan_asset_id), loan_oracle_asset_id),
+            collateral_asset: NativeAsset::new(collateral_oracle_asset_id),
+            loan_asset: ContractAsset::new(loan_asset_id, loan_oracle_asset_id),
+            deposit_fee,
         }
     }
 
@@ -112,14 +173,24 @@ impl LendingProtocol {
     #[payable]
     pub fn deposit_collateral(&mut self) -> bool {
         let deposit = env::attached_deposit();
-        let fee = deposit / 200; // 0.5% fee
-        let mut amount = deposit;
+        let fee = deposit
+            .mul(self.deposit_fee.numerator.0)
+            .div_ceil(self.deposit_fee.denominator.0); // round fee up
 
-        // fee = fee; // FIXME: What is this supposed to do?
-        amount -= fee;
-        let col = deposit - fee;
+        // TODO: track fees
 
-        assert!(amount > 0, "Deposit Amount should be greater than 0");
+        let amount = deposit
+            .checked_sub(fee)
+            // should never underflow if fee <= 100%
+            .unwrap_or_else(|| env::panic_str("Underflow during fee calculation"));
+
+        // Note: this is exceedingly unlikely (really should only happen if
+        // deposit is small while fee is close to 1), but definitely not
+        // impossible.
+        require!(
+            amount > 0,
+            "Deposit amount after fee must be greater than 0",
+        );
 
         let account_id = env::predecessor_account_id();
         let loan: &mut Loan = self.loans.entry(account_id.clone()).or_insert(Loan {
@@ -132,12 +203,13 @@ impl LendingProtocol {
             },
         });
 
-        loan.collateral += col;
+        loan.collateral += amount;
         true
     }
 
     // Remove collateral function allows the user to withdraw the collateral from the contract
-    pub fn remove_collateral(&mut self, amount: Balance) -> bool {
+    pub fn remove_collateral(&mut self, amount: U128) -> bool {
+        let amount = amount.0;
         let account_id = env::predecessor_account_id();
         let loan: &mut Loan = self
             .loans
@@ -176,7 +248,7 @@ impl LendingProtocol {
         self.loans.remove(&predecessor_account_id);
     }
 
-    pub fn borrow(&mut self, usdt_amount: u128) {
+    pub fn borrow(&mut self, loan_amount: U128) {
         /*
            1. Calculate the collateral value
            1a. Calculate current loan value
@@ -184,18 +256,22 @@ impl LendingProtocol {
            3. Check if the max borrowable amount is greater than the requested amount
            4. If yes, then borrow the requested amount
         */
+        let loan_amount = loan_amount.0;
 
-        assert!(usdt_amount > 0, "Borrow Amount should be greater than 0");
+        assert!(loan_amount > 0, "Borrow Amount should be greater than 0");
 
         let account_id: AccountId = env::predecessor_account_id();
         log!("predecessor_account_id: {}", account_id);
 
-        // Get NEAR Price
+        // Get collateral price
         let price = self.collateral_asset.last_price.unwrap();
 
-        let near_usdt_price: u128 = price.multiplier / 10000;
-        log!("price: {}", price.multiplier);
-        log!("near_usdt_price: {}", near_usdt_price);
+        // useless
+        {
+            let near_usdt_price: u128 = price.multiplier / 10000;
+            log!("price: {}", price.multiplier);
+            log!("near_usdt_price: {}", near_usdt_price);
+        }
 
         let loan: &mut Loan = self
             .loans
@@ -224,35 +300,30 @@ impl LendingProtocol {
         let max_borrowable_amount = total_max_borrowable_amount.saturating_sub(borrowed_value);
 
         log!("max_borrowable_amount: {}", max_borrowable_amount);
-        log!("usdt_amount: {}", usdt_amount);
+        log!("loan_amount: {}", loan_amount);
         log!("current_account_id: {}", env::current_account_id());
 
         // If max borrowable amount is greater than the requested amount, then borrow the requested amount
-        if usdt_amount <= max_borrowable_amount {
+        if loan_amount <= max_borrowable_amount {
             // borrow the requested amount
-            let usdt_contract_account_id: AccountId =
-                AccountId::from_str(USDT_CONTRACT_ID).unwrap();
-            loan.borrowed += usdt_amount;
-            Promise::new(usdt_contract_account_id).function_call(
-                "ft_transfer".to_string(),
-                format!(
-                    r#"{{"receiver_id": "{}", "amount": "{}", "memo": "Borrowed USDT"}}"#,
+            loan.borrowed += loan_amount;
+            ext_ft_core::ext(self.loan_asset.contract_id.clone())
+                .with_static_gas(Gas(5_000_000_000_000))
+                .with_attached_deposit(1)
+                .ft_transfer(
                     account_id.clone(),
-                    usdt_amount
-                )
-                .into_bytes(),
-                1,
-                Gas(50_000_000_000_000),
-            );
+                    loan_amount.into(),
+                    Some("Borrowed USDT".to_string()),
+                );
         } else {
             log!("max_borrowable_amount: {}", max_borrowable_amount);
-            log!("usdt_amount: {}", usdt_amount);
+            log!("loan_amount: {}", loan_amount);
             // assert_eq!(false, true, "Insufficient collateral")
         }
     }
 
     // The "repay" method calculates the actual repayment amount and the refund amount based on the outstanding loan. If there's an overpayment, it will refund the excess amount to the user.
-    pub fn repay(&mut self, account_id: &AccountId, usdt_amount: u128) -> Option<Promise> {
+    pub(crate) fn repay(&mut self, account_id: &AccountId, amount: u128) -> Option<Promise> {
         /*
           1. Calculate the collateral value
           2. Calculate current loaned value
@@ -261,7 +332,7 @@ impl LendingProtocol {
           4. If yes, then repay the requested amount
         */
 
-        assert!(usdt_amount > 0, "Repay Amount should be greater than 0");
+        assert!(amount > 0, "Repay amount should be greater than 0");
 
         // let predecessor_account_id: AccountId = env::predecessor_account_id();
 
@@ -280,8 +351,8 @@ impl LendingProtocol {
         let borrowed_value: u128 = loan.borrowed;
 
         // If max borrowable amount is greater than the requested amount, then borrow the requested amount
-        if usdt_amount + MIN_COLLATERAL_VALUE <= borrowed_value {
-            loan.borrowed -= usdt_amount;
+        if amount + MIN_COLLATERAL_VALUE <= borrowed_value {
+            loan.borrowed -= amount;
             // Recalculate collateral ratio
             loan.collateral_ratio = collateral_value / loan.borrowed;
             // Fix return
@@ -374,10 +445,10 @@ mod tests {
     fn init_sane_defaults(lower_collateral_accounts: Vec<AccountId>) -> LendingProtocol {
         LendingProtocol::new(
             lower_collateral_accounts,
-            None,
             "wrap.testnet".to_string(),
             "usdt.fakes.testnet".parse().unwrap(),
             "usdt.fakes.testnet".to_string(),
+            (1, 200).into(), // 0.5%
         )
     }
 
@@ -408,7 +479,7 @@ mod tests {
         set_context("alice.near", collateral_amount);
 
         contract.deposit_collateral();
-        contract.borrow(borrow_amount);
+        contract.borrow(borrow_amount.into());
 
         let loans = contract.get_all_loans();
         for (key, value) in &loans {
@@ -437,7 +508,7 @@ mod tests {
 
         contract.deposit_collateral();
 
-        contract.borrow(borrow_amount);
+        contract.borrow(borrow_amount.into());
 
         // Need to import Stable Coin contract and do a transfer
         contract.repay(&a, 50);
@@ -469,8 +540,8 @@ mod tests {
         set_context("alice.near", collateral_amount);
 
         contract.deposit_collateral();
-        contract.borrow(borrow_amount);
-        contract.remove_collateral(5000);
+        contract.borrow(borrow_amount.into());
+        contract.remove_collateral(5000.into());
 
         let loans = contract.get_all_loans();
         for (key, value) in &loans {
@@ -505,7 +576,7 @@ mod tests {
 
         //assert_eq!(env::account_balance(), 100);
 
-        contract.borrow(borrow_amount);
+        contract.borrow(borrow_amount.into());
         contract.close();
 
         let loans = contract.get_all_loans();
