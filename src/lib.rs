@@ -1,6 +1,8 @@
 pub mod big_decimal;
 pub mod external;
 pub mod oracle;
+mod oracle;
+use oracle::Oracle;
 
 use crate::big_decimal::*;
 use crate::external::*;
@@ -170,9 +172,11 @@ impl LendingProtocol {
 
         // Get NEAR Price
         let price = self.get_latest_price().prices[0].price.unwrap();
+        // let multiplier = self.get_latest_price().prices[0].price.unwrap().multiplier;
 
-        let near_usdt_price: u128 = price.multiplier / 10000;
+        let near_usdt_price: u128 = price.multiplier / price.decimals as u128;
         log!("price: {}", price.multiplier);
+        log!("decimals: {}", price.decimals);
         log!("near_usdt_price: {}", near_usdt_price);
 
         let loan: &mut Loan = self
@@ -499,5 +503,31 @@ mod tests {
 
         are_vectors_equal(loan_accounts, v);
         assert_eq!(contract.loans.len(), 2);
+    }
+
+    #[test]
+    pub fn test_borrow_insufficient_collateral() {
+        let a: AccountId = "alice.near".parse().unwrap();
+        testing_env!(VMContextBuilder::new()
+            .predecessor_account_id(a.clone())
+            .signer_account_id(a.clone())
+            .build());
+
+        let mut contract: LendingProtocol = LendingProtocol::new(vec![a.clone()]);
+        let collateral_amount: Balance = 10000;
+        let borrow_amount: u128 = 500;
+
+        set_context("alice.near", collateral_amount);
+
+        contract.deposit_collateral();
+        contract.borrow(borrow_amount);
+
+        let loans = contract.get_all_loans();
+        for (key, value) in &loans {
+            println!("Loan: {}: {}", key, value.borrowed);
+        }
+
+        let loan = contract.loans.get(&a).unwrap();
+        assert_eq!(loan.borrowed, 0);
     }
 }

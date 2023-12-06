@@ -46,6 +46,10 @@ pub struct PriceData {
     pub prices: Vec<AssetOptionalPrice>,
 }
 
+#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone)]
+#[serde(crate = "near_sdk::serde")]
+pub struct PriceIdentifier(pub [u8; 32]);
+
 impl Default for PriceData {
     fn default() -> Self {
         Self {
