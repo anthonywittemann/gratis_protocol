@@ -286,11 +286,13 @@ impl LendingProtocol {
 
         let mut loan = *self.get_loan(&account_id);
 
+        require!(*loan.borrowed > 0, "No loan to liquidate");
+
         let status = self.get_loan_status(&loan);
 
         require!(
             status.is_undercollateralized || self_liquidate,
-            "Loan cannot be liquidated",
+            "Loan must be undercollateralized to be automatically liquidated",
         );
 
         if status.collateral_valuation >= status.borrowed_valuation {
