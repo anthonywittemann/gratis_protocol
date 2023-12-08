@@ -98,15 +98,21 @@ impl FungibleTokenReceiver for LendingProtocol {
         amount: U128,
         msg: String,
     ) -> PromiseOrValue<U128> {
-        // update loan information
-        let excess = self.repay(&sender_id, LoanAssetBalance(amount.0));
+        let token_contract_id = env::predecessor_account_id();
 
-        // close loan if requested
-        if msg == "close" {
-            self.close();
+        if token_contract_id == self.loan_asset.contract_id {
+            // update loan information
+            let excess = self.repay(&sender_id, LoanAssetBalance(amount.0));
+
+            // close loan if requested
+            if msg == "close" {
+                self.close();
+            }
+
+            PromiseOrValue::Value(U128(*excess))
+        } else {
+            env::panic_str("Unknown token");
         }
-
-        PromiseOrValue::Value(U128(*excess))
     }
 }
 
