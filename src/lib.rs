@@ -53,6 +53,7 @@ pub struct LendingProtocol {
     pub loan_asset: ContractAsset,
     pub deposit_fee: Fraction,
     pub collateral_deposit_fee_pool: CollateralAssetBalance,
+    pub liquidated_collateral_pool: CollateralAssetBalance,
 }
 
 #[near_bindgen]
@@ -128,6 +129,7 @@ impl LendingProtocol {
             ),
             deposit_fee: config.deposit_fee,
             collateral_deposit_fee_pool: CollateralAssetBalance(0),
+            liquidated_collateral_pool: CollateralAssetBalance(0),
         }
     }
 
@@ -255,8 +257,7 @@ impl LendingProtocol {
             "Loan must be undercollateralized to be automatically liquidated",
         );
 
-        // TODO: Track liquidations.
-        if status.collateral_valuation >= status.borrowed_valuation {
+        let liquidated_collateral = if status.collateral_valuation >= status.borrowed_valuation {
             // Happy path: we have enough collateral to liquidate the loan.
 
             // Invariant: This value is guaranteed to be <= loan.collateral
@@ -267,7 +268,7 @@ impl LendingProtocol {
             );
 
             loan.collateral -= liquidate_collateral_amount;
-            self.loans.insert(account_id, loan);
+            liquidate_collateral_amount
         } else {
             // Loan is <100% collateralized, so even liquidating all
             // collateral will not pay back the loan.
@@ -275,9 +276,13 @@ impl LendingProtocol {
 
             // TODO: This loan was <100% collateralized when liquidated. Do we
             // need to do some additional tracking/other stuff here?
+            let amount = loan.collateral;
             loan.collateral = CollateralAssetBalance(0);
-            self.loans.insert(account_id, loan);
-        }
+            amount
+        };
+
+        self.loans.insert(account_id, loan);
+        self.liquidated_collateral_pool += liquidated_collateral;
     }
 
     pub fn borrow(&mut self, amount: U128) -> Promise {
@@ -432,6 +437,10 @@ impl LendingProtocol {
 
     pub fn get_collateral_deposit_fee_pool(&self) -> U128 {
         U128(*self.collateral_deposit_fee_pool)
+    }
+
+    pub fn get_liquidated_collateral_pool(&self) -> U128 {
+        U128(*self.liquidated_collateral_pool)
     }
 
     /* -----------------------------------------------------------------------------------
