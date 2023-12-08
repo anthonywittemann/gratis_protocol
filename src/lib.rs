@@ -1,63 +1,36 @@
-pub mod asset;
-pub mod big_decimal;
-pub mod external;
-pub mod oracle;
+mod asset;
+mod big_decimal;
+mod external;
+mod loan;
+mod oracle;
+mod util;
 
-use crate::big_decimal::BigDecimal;
-use crate::external::{ext_price_oracle, PriceData};
-
-use asset::{
-    CollateralAssetBalance, ContractAsset, LoanAssetBalance, NativeAsset, OracleCanonicalValuation,
+use crate::asset::{
+    valuation, CollateralAssetBalance, ContractAsset, LoanAssetBalance, NativeAsset,
+    OracleCanonicalValuation,
 };
-use external::Price;
+use crate::external::{ext_price_oracle, PriceData};
+use crate::loan::{Loan, LoanStatus};
+use crate::util::Fraction;
+
 use near_contract_standards::fungible_token::{core::ext_ft_core, receiver::FungibleTokenReceiver};
-use near_sdk::store::LookupSet;
 use near_sdk::{
     borsh::{self, BorshDeserialize, BorshSerialize},
     env,
     json_types::U128,
     log, near_bindgen, require,
     serde::{Deserialize, Serialize},
-    store::UnorderedMap,
+    store::{LookupSet, UnorderedMap},
     AccountId, Balance, BorshStorageKey, Gas, PanicOnDefault, Promise, PromiseOrValue,
 };
+
 use std::ops::Mul;
 
 // CONSTANTS
-// const LENDING_CONTRACT_ID: &str = "gratis_protocol.testnet"; // TODO: update with testnet address
 const MIN_COLLATERAL_RATIO: u128 = 120;
 const LOWER_COLLATERAL_RATIO: u128 = 105;
 pub const GAS_FOR_FT_TRANSFER: Gas = Gas(50_000_000_000_000);
 pub const SAFE_GAS: Balance = 50_000_000_000_000;
-
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize, Debug, Clone, Copy)]
-#[serde(crate = "near_sdk::serde")]
-pub struct Fraction {
-    numerator: U128,
-    denominator: U128,
-}
-
-impl<T: Into<U128>, U: Into<U128>> From<(T, U)> for Fraction {
-    fn from((numerator, denominator): (T, U)) -> Self {
-        Self {
-            numerator: numerator.into(),
-            denominator: denominator.into(),
-        }
-    }
-}
-
-impl Fraction {
-    pub fn new(numerator: U128, denominator: U128) -> Self {
-        Self {
-            numerator,
-            denominator,
-        }
-    }
-
-    pub fn to_percentage(&self) -> u128 {
-        self.numerator.0 * 100 / self.denominator.0
-    }
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "near_sdk::serde")]
@@ -68,14 +41,6 @@ pub struct LendingProtocolConfiguration {
     pub loan_oracle_asset_id: String,
     pub deposit_fee: Fraction,
     pub lower_collateral_accounts: Vec<AccountId>,
-}
-
-#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone, Copy)]
-#[serde(crate = "near_sdk::serde")]
-pub struct Loan {
-    pub collateral: CollateralAssetBalance, // NOTE: this only works with NEAR as collateral currency
-    pub borrowed: LoanAssetBalance,
-    pub minimum_collateral_ratio: Fraction,
 }
 
 #[near_bindgen]
@@ -116,32 +81,10 @@ impl FungibleTokenReceiver for LendingProtocol {
     }
 }
 
-fn valuation(amount: u128, price: &Price) -> OracleCanonicalValuation {
-    BigDecimal::round_u128(&BigDecimal::from_balance_price(amount, price, 0)).into()
-}
-
 #[derive(BorshSerialize, BorshStorageKey)]
 enum StorageKey {
     Loans,
     LowerCollateralAccounts,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(crate = "near_sdk::serde")]
-pub struct LoanStatus {
-    pub borrowed_amount: LoanAssetBalance,
-    pub borrowed_valuation: OracleCanonicalValuation,
-    pub collateral_amount: CollateralAssetBalance,
-    pub collateral_valuation: OracleCanonicalValuation,
-    pub minimum_collateral_ratio: Fraction,
-    pub is_undercollateralized: bool,
-}
-
-impl LoanStatus {
-    pub fn total_max_borrowable_valuation(&self) -> OracleCanonicalValuation {
-        self.minimum_collateral_ratio.denominator.0 * self.collateral_valuation
-            / self.minimum_collateral_ratio.numerator.0
-    }
 }
 
 #[near_bindgen]

@@ -8,10 +8,6 @@ use near_sdk::{
 type AssetId = String;
 pub type DurationSec = u32;
 
-pub const TGAS: u64 = 1_000_000_000_000;
-pub const NO_DEPOSIT: u128 = 0;
-pub const XCC_SUCCESS: u64 = 1;
-
 #[derive(Serialize, Deserialize)]
 #[serde(crate = "near_sdk::serde")]
 pub struct AssetPrice {
@@ -26,8 +22,7 @@ pub struct AssetOptionalPrice {
     pub price: Option<Price>,
 }
 
-#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone, Copy)]
-#[cfg_attr(not(target_arch = "wasm32"), derive(Debug))]
+#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone, Copy, Debug)]
 #[serde(crate = "near_sdk::serde")]
 pub struct Price {
     #[serde(with = "u128_dec_format")]

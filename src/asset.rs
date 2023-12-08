@@ -9,7 +9,7 @@ use near_sdk::{
     AccountId,
 };
 
-use crate::external::Price;
+use crate::{big_decimal::BigDecimal, external::Price};
 
 #[derive(BorshDeserialize, BorshSerialize, Deserialize, Serialize, Clone, Debug)]
 #[serde(crate = "near_sdk::serde")]
@@ -175,3 +175,7 @@ macro_rules! asset_newtype {
 asset_newtype!(CollateralAssetBalance, u128);
 asset_newtype!(LoanAssetBalance, u128);
 asset_newtype!(OracleCanonicalValuation, u128);
+
+pub fn valuation(amount: u128, price: &Price) -> OracleCanonicalValuation {
+    BigDecimal::round_u128(&BigDecimal::from_balance_price(amount, price, 0)).into()
+}
