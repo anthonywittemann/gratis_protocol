@@ -87,6 +87,7 @@ pub struct LendingProtocol {
     pub collateral_asset: NativeAsset,
     pub loan_asset: ContractAsset,
     pub deposit_fee: Fraction,
+    pub collateral_deposit_fee_pool: CollateralAssetBalance,
 }
 
 #[near_bindgen]
@@ -130,6 +131,13 @@ pub struct LoanStatus {
     pub is_undercollateralized: bool,
 }
 
+impl LoanStatus {
+    pub fn total_max_borrowable_valuation(&self) -> OracleCanonicalValuation {
+        self.minimum_collateral_ratio.denominator.0 * self.collateral_valuation
+            / self.minimum_collateral_ratio.numerator.0
+    }
+}
+
 #[near_bindgen]
 impl LendingProtocol {
     fn loan_valuation(&self, loan_amount: LoanAssetBalance) -> OracleCanonicalValuation {
@@ -170,6 +178,7 @@ impl LendingProtocol {
                 config.loan_oracle_asset_id,
             ),
             deposit_fee: config.deposit_fee,
+            collateral_deposit_fee_pool: CollateralAssetBalance(0),
         }
     }
 
@@ -183,8 +192,6 @@ impl LendingProtocol {
                 .mul(self.deposit_fee.numerator.0)
                 .div_ceil(self.deposit_fee.denominator.0), // round fee up
         );
-
-        // TODO: track fees
 
         let amount = CollateralAssetBalance(
             deposit
@@ -222,6 +229,10 @@ impl LendingProtocol {
             });
 
         loan.collateral += amount;
+
+        // Track fees
+        self.collateral_deposit_fee_pool += fee;
+
         true
     }
 
@@ -353,9 +364,7 @@ impl LendingProtocol {
         log!("collateral_ratio: {:?}", loan.minimum_collateral_ratio);
 
         // get max borrowable amount
-        let total_max_borrowable_value = loan.minimum_collateral_ratio.denominator.0
-            * loan_status.collateral_valuation
-            / loan.minimum_collateral_ratio.numerator.0;
+        let total_max_borrowable_value = loan_status.total_max_borrowable_valuation();
 
         let max_additional_borrowable_valuation =
             if total_max_borrowable_value > loan_status.borrowed_valuation {
@@ -451,12 +460,24 @@ impl LendingProtocol {
         }
     }
 
+    pub fn get_total_max_borrowable_valuation_for_account(&self, account_id: &AccountId) -> U128 {
+        U128(
+            *self
+                .get_loan_status_for_account(account_id)
+                .total_max_borrowable_valuation(),
+        )
+    }
+
     pub fn get_loan_status_for_account(&self, account_id: &AccountId) -> LoanStatus {
         self.get_loan_status(self.get_loan(account_id))
     }
 
     pub fn get_all_loans(&self) -> std::collections::HashMap<&AccountId, &Loan> {
         self.loans.iter().collect()
+    }
+
+    pub fn get_collateral_deposit_fee_pool(&self) -> U128 {
+        U128(*self.collateral_deposit_fee_pool)
     }
 
     /* -----------------------------------------------------------------------------------
