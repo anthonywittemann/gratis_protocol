@@ -255,6 +255,7 @@ impl LendingProtocol {
             "Loan must be undercollateralized to be automatically liquidated",
         );
 
+        // TODO: Track liquidations.
         if status.collateral_valuation >= status.borrowed_valuation {
             // Happy path: we have enough collateral to liquidate the loan.
 
@@ -266,12 +267,16 @@ impl LendingProtocol {
             );
 
             loan.collateral -= liquidate_collateral_amount;
-            // TODO: Track liquidations.
             self.loans.insert(account_id, loan);
         } else {
-            // TODO: EMERGENCY: Loan is <100% collateralized, so even
-            // liquidating all collateral will not pay back the loan.
-            todo!("Loan is <100% collateralized!");
+            // Loan is <100% collateralized, so even liquidating all
+            // collateral will not pay back the loan.
+            log!("Loan is <100% collateralized!");
+
+            // TODO: This loan was <100% collateralized when liquidated. Do we
+            // need to do some additional tracking/other stuff here?
+            loan.collateral = CollateralAssetBalance(0);
+            self.loans.insert(account_id, loan);
         }
     }
 
