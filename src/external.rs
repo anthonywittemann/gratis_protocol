@@ -1,17 +1,12 @@
-use crate::*;
-
-use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::ext_contract;
-use near_sdk::json_types::U128;
-use near_sdk::serde::{Deserialize, Serialize};
-use near_sdk::Timestamp;
+use near_sdk::{
+    borsh::{self, BorshDeserialize, BorshSerialize},
+    ext_contract,
+    serde::{Deserialize, Serialize},
+    Balance, Timestamp,
+};
 
 type AssetId = String;
 pub type DurationSec = u32;
-
-pub const TGAS: u64 = 1_000_000_000_000;
-pub const NO_DEPOSIT: u128 = 0;
-pub const XCC_SUCCESS: u64 = 1;
 
 #[derive(Serialize, Deserialize)]
 #[serde(crate = "near_sdk::serde")]
@@ -20,15 +15,14 @@ pub struct AssetPrice {
     pub price: Price,
 }
 
-#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone)]
+#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "near_sdk::serde")]
 pub struct AssetOptionalPrice {
     pub asset_id: AssetId,
     pub price: Option<Price>,
 }
 
-#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone, Copy)]
-#[cfg_attr(not(target_arch = "wasm32"), derive(Debug))]
+#[derive(BorshSerialize, BorshDeserialize, Serialize, Deserialize, Clone, Copy, Debug)]
 #[serde(crate = "near_sdk::serde")]
 pub struct Price {
     #[serde(with = "u128_dec_format")]
@@ -36,7 +30,7 @@ pub struct Price {
     pub decimals: u8,
 }
 
-#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone)]
+#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "near_sdk::serde")]
 pub struct PriceData {
     #[serde(with = "u64_dec_format")]
@@ -51,13 +45,22 @@ impl Default for PriceData {
         Self {
             timestamp: 1,            // default value for timestamp
             recency_duration_sec: 1, // default value for recency_duration_sec
-            prices: vec![AssetOptionalPrice {
-                asset_id: "wrap.testnet".to_string(),
-                price: Some(Price {
-                    multiplier: 15000, // default value for multiplier
-                    decimals: 6,       // default value for decimals
-                }),
-            }], // default value for prices
+            prices: vec![
+                AssetOptionalPrice {
+                    asset_id: "wrap.testnet".to_string(),
+                    price: Some(Price {
+                        multiplier: 15000, // default value for multiplier
+                        decimals: 6,       // default value for decimals
+                    }),
+                },
+                AssetOptionalPrice {
+                    asset_id: "usdt.fakes.testnet".to_string(),
+                    price: Some(Price {
+                        multiplier: 10000,
+                        decimals: 10,
+                    }),
+                },
+            ], // default value for prices
         }
     }
 }
@@ -66,27 +69,6 @@ impl Default for PriceData {
 #[ext_contract(ext_price_oracle)]
 trait PriceOracle {
     fn get_price_data(&self, asset_ids: Option<Vec<AssetId>>) -> PriceData;
-}
-
-// USDT interface, for cross-contract calls
-#[ext_contract(ext_usdt)]
-trait Usdt {
-    fn ft_transfer_call(
-        &mut self,
-        receiver_id: AccountId,
-        amount: U128,
-        memo: Option<String>,
-        msg: String,
-    ) -> String;
-
-    fn ft_on_transfer(&mut self, sender_id: AccountId, amount: U128, msg: String) -> Promise;
-
-    fn ft_transfer(
-        &mut self,
-        receiver_id: AccountId,
-        amount: U128,
-        memo: Option<String>,
-    ) -> Promise;
 }
 
 pub mod u128_dec_format {
@@ -129,8 +111,4 @@ pub mod u64_dec_format {
             .parse()
             .map_err(de::Error::custom)
     }
-}
-
-pub fn to_nano(ts: u32) -> Timestamp {
-    Timestamp::from(ts) * 10u64.pow(9)
 }

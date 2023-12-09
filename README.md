@@ -1,69 +1,78 @@
 # Gratis Protocol
+
 0% interest lending protocol on NEAR
 
+## Getting Started
 
+```sh
+./build.sh
+./dev-deploy.sh
+```
+
+```sh
 cargo build --target wasm32-unknown-unknown --release
 
 near dev-deploy ./target/wasm32-unknown-unknown/release/gratis_protocol.wasm 
 
-export G=devAcct
+export G= GRATIS_ACCOUNT
 export USDT=usdt.fakes.testnet
+export ACCT= YOUR_ACCOUNT
+```
 
-near call $G new '{"lower_collateral_accounts": ["idk"]}' --accountId $G
+```sh
+near call $G new '{"lower_collateral_accounts": ["kenobi.testnet"]}' --accountId $G
+```
+
+## Operations
 
 ### Update Price
 
 ### Get Latest Price
 
+```sh
 near call $G get_latest_price --accountId $G
+```
 
 ### Get all Loans
 
+```sh
 near call $G get_all_loans --accountId $G
+```
 
-### Deposit Collateral 
+### Deposit Collateral
+
+```sh
 near call $G deposit_collateral '{"amount": 1000000}' --accountId $G
+```
 
+### Borrow
 
-### Borrow 
+```sh
 near call $G borrow '{"usdt_amount": 1}' --accountId $G --gas 300000000000000
+```
 
 ### Repay
-near call $G repay '{"usdt_amount": 50}' --accountId $G --gas 300000000000000
+
+```sh
+near call $G repay '{"account_id": "kenobi.testnet", "usdt_amount": 50}' --accountId $ACCT --gas 300000000000000
+```
 
 ### Get USDT Value of NEAR
+
+```sh
 near call $G get_usdt_value --accountId $G --gas 300000000000000
 
 near call $G get_prices --accountId $G --gas 300000000000000
+```
 
+### Open and Close an Account
 
-## Kenobi Stuff
-near call $G deposit_collateral '{"amount": 10}' --accountId kenobi.testnet --deposit 10
+```sh
+near call $G deposit_collateral '{"amount": 10}' --accountId $ACCT --deposit 10
 
-near call $G borrow '{"usdt_amount": 1}' --accountId kenobi.testnet --gas 300000000000000 --depositYocto 1
+near call $G borrow '{"usdt_amount": 500}' --accountId $ACCT --gas 300000000000000 
 
+near call $USDT ft_transfer_call '{"receiver_id": "gratis.kenobi.testnet", "amount": "1", "memo": "Test", "msg": "close"}' --accountId $ACCT --gas 300000000000000 --depositYocto 1
 
-near call $USDT ft_transfer_call '{"receiver_id": "dev-1688424587747-63751589033436", "amount": "1", "memo": "Test", "msg": "close"}' --accountId kenobi.testnet --gas 300000000000000 --depositYocto 1
-
-near call $G close '{"collateral": 1, "sender_id": "kenobi.testnet"}' --accountId kenobi.testnet --gas 300000000000000
-
-
-### Tomohiro Stuff
-near call $G deposit_collateral '{"amount": 99}' --accountId tomohiro.testnet
-
-near call $G borrow '{"usdt_amount": 30}' --accountId tomohiro.testnet --gas 300000000000000
-
-near call $G repay '{"usdt_amount": 50}' --accountId tomohiro.testnet --gas 300000000000000
-
-near call $G call_ft_transfer '{"receiver_id": "kenobi.testnet", "amount": "1", "memo": "Test", "msg": "Test"}' --accountId tomohiro.testnet --gas 300000000000000 --depositYocto 1
-
-near call $G transfer_to_self '{"amount": "1"}' --accountId kenobi.testnet --gas 300000000000000 --depositYocto 1
-
-
-
-near call $USDT ft_transfer_call '{"receiver_id": "dev-1688424587747-63751589033436", "amount": "1", "memo": "Test", "msg": ""}' --accountId kenobi.testnet --gas 300000000000000 --depositYocto 1
-
-near call $USDT ft_transfer_call '{"receiver_id": "dev-1688424587747-63751589033436", "amount": "1", "memo": "Test", "msg": "close"}' --accountId kenobi.testnet --gas 300000000000000 --depositYocto 1
-
-
-
+near call $G close '{}' --accountId $ACCT --gas 300000000000000
+```

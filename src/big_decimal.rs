@@ -1,12 +1,18 @@
-use crate::*;
-use near_sdk::borsh::maybestd::io::Write;
-use near_sdk::json_types::U128;
-use near_sdk::serde::Serializer;
+#![allow(clippy::assign_op_pattern)]
+
+use near_sdk::{
+    borsh::{maybestd::io::Write, BorshDeserialize, BorshSerialize},
+    json_types::U128,
+    serde::{Deserialize, Serialize, Serializer},
+    Balance,
+};
 use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
 use std::ops::{Add, Div, Mul, Sub};
 #[cfg(not(target_arch = "wasm32"))]
 use std::str::FromStr;
+
+use crate::external::Price;
 
 uint::construct_uint!(
     pub struct U256(4);
@@ -38,9 +44,9 @@ impl Display for BigDecimal {
         let a = self.0 / U384::from(BIG_DIVISOR);
         let b = (self.0 - a * U384::from(BIG_DIVISOR)).as_u128();
         if b > 0 {
-            write!(f, "{}", format!("{}.{:027}", a, b).trim_end_matches('0'))
+            write!(f, "{}", format!("{a}.{b:027}").trim_end_matches('0'))
         } else {
-            write!(f, "{}.0", a)
+            write!(f, "{a}.0")
         }
     }
 }
@@ -48,12 +54,12 @@ impl Display for BigDecimal {
 #[cfg(not(target_arch = "wasm32"))]
 impl std::fmt::Debug for BigDecimal {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{self}")
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-const PARSE_INT_ERROR: &'static str = "Parse int error";
+const PARSE_INT_ERROR: &str = "Parse int error";
 
 #[cfg(not(target_arch = "wasm32"))]
 impl FromStr for BigDecimal {
@@ -73,7 +79,7 @@ impl FromStr for BigDecimal {
         } else {
             (s, 0u128)
         };
-        let int = U384::from_str(&int).map_err(|_| PARSE_INT_ERROR)?;
+        let int = U384::from_str(int).map_err(|_| PARSE_INT_ERROR)?;
         if dec >= BIG_DIVISOR {
             return Err(String::from("The decimal part is too large"));
         }
@@ -99,7 +105,7 @@ impl<'de> Deserialize<'de> for BigDecimal {
         D: near_sdk::serde::Deserializer<'de>,
     {
         let s: String = Deserialize::deserialize(deserializer)?;
-        Ok(Self::from_str(&s).map_err(|err| near_sdk::serde::de::Error::custom(err))?)
+        Self::from_str(&s).map_err(near_sdk::serde::de::Error::custom)
     }
 }
 
@@ -177,7 +183,7 @@ impl From<BigDecimal> for LowU128 {
 
 impl BigDecimal {
     pub fn from_ratio(ratio: u32) -> Self {
-        Self(U384::from(ratio) * U384::from(BIG_DIVISOR / (MAX_RATIO as u128)))
+        Self(U384::from(ratio) * U384::from(BIG_DIVISOR / u128::from(MAX_RATIO)))
     }
 
     pub fn mul_ratio(&self, ratio: u32) -> Self {
@@ -270,7 +276,7 @@ impl BorshDeserialize for BigDecimal {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use rand::RngCore;
     // Number of milliseconds in a regular year.
     const N: u64 = 31540000000;
     // X = 2
@@ -283,14 +289,17 @@ mod tests {
     }
 
     fn almost_eq(a: u128, b: u128, prec: u32) {
-        let p = 10u128.pow(27 - prec);
-        let ap = (a + p / 2) / p;
-        let bp = (b + p / 2) / p;
-        assert_eq!(
-            ap,
-            bp,
-            "{}",
-            format!("Expected {} to eq {}, with precision {}", a, b, prec)
+        let threshold = 10u128.pow(prec);
+        let diff = if a > b { a - b } else { b - a };
+
+        assert!(
+            diff <= threshold,
+            "Expected {} to be almost equal to {}, with precision {} (difference: {}) (max allowed: {})",
+            a,
+            b,
+            prec,
+            diff,
+            threshold
         );
     }
 
@@ -310,65 +319,66 @@ mod tests {
         assert_eq!((b(3) / b(5)).round_u128(), 1);
     }
 
-    // #[test]
-    // fn test_pow() {
-    //     let r = BigDecimal::from(LOW_R);
-    //     let x = r.pow(N);
-    //     let low_x = LowU128::from(x);
-    //     almost_eq(LOW_X.0, low_x.0, 15);
-    // }
+    #[test]
+    fn test_pow() {
+        let r = BigDecimal::from(LOW_R);
+        let x = r.pow(N);
+        let low_x = LowU128::from(x);
+        almost_eq(LOW_X.0, low_x.0, 25);
+    }
 
-    // #[test]
-    // fn test_compound_pow() {
-    //     fn test(split_n: u64) {
-    //         let r = BigDecimal::from(LOW_R);
-    //         let initial_val = 12345 * 10u128.pow(24);
-    //         let mut val = initial_val;
-    //         for i in 1..=split_n {
-    //             let exponent = (N * i / split_n) - (N * (i - 1) / split_n);
-    //             let interest = r.pow(exponent);
-    //             val = interest.round_mul_u128(val);
-    //         }
-    //         almost_eq(val, initial_val * 2, 15);
-    //     }
+    #[test]
+    fn test_compound_pow() {
+        fn test(split_n: u64) {
+            let r = BigDecimal::from(LOW_R);
+            let initial_val = 12345 * 10u128.pow(24);
+            let mut val = initial_val;
+            for i in 1..=split_n {
+                let exponent = (N * i / split_n) - (N * (i - 1) / split_n);
+                let interest = r.pow(exponent);
+                val = interest.round_mul_u128(val);
+            }
+            almost_eq(val, initial_val * 2, 25);
+        }
 
-    //     (1..=100).for_each(test);
-    // }
+        (1..=100).for_each(test);
+    }
 
-    // #[test]
-    // fn test_compound_pow_precision() {
-    //     fn test(split_n: u64) {
-    //         let r = BigDecimal::from(LOW_R);
-    //         let initial_val = 12345 * 10u128.pow(24);
-    //         let mut val = initial_val;
-    //         let exponent = N / split_n;
-    //         assert_eq!(exponent * split_n, N);
-    //         let interest = r.pow(exponent);
-    //         for _ in 1..=split_n {
-    //             val = interest.round_mul_u128(val);
-    //         }
-    //         almost_eq(val, initial_val * 2, 15);
-    //     }
-    //     test(N / 60000);
-    //     test(N / 1000000);
-    //     test(N / (24 * 60 * 60));
-    // }
+    #[test]
+    fn test_compound_pow_precision() {
+        fn test(split_n: u64) {
+            let r = BigDecimal::from(LOW_R);
+            let initial_val = 12345 * 10u128.pow(24);
+            let mut val = initial_val;
+            let exponent = N / split_n;
+            // assert_eq!(exponent * split_n, N);
+            let interest = r.pow(exponent);
+            for _ in 1..=split_n {
+                val = interest.round_mul_u128(val);
+            }
+            almost_eq(val, initial_val * 2, 25);
+        }
+        test(N / 60000);
+        test(N / 1000000);
+        test(N / (24 * 60 * 60));
+    }
 
-    // #[test]
-    // fn test_compound_pow_random() {
-    //     const MAX_STEP: u64 = 1000000;
-    //     let r = BigDecimal::from(LOW_R);
-    //     let initial_val = 12345 * 10u128.pow(24);
-    //     let mut val = initial_val;
-    //     let mut total_exponent = 0;
-    //     while total_exponent < N {
-    //         let exponent = std::cmp::min(N - total_exponent, rng.next_u64() % MAX_STEP + 1);
-    //         total_exponent += exponent;
-    //         let interest = r.pow(exponent);
-    //         val = interest.round_mul_u128(val);
-    //     }
-    //     almost_eq(val, initial_val * 2, 15);
-    // }
+    #[test]
+    fn test_compound_pow_random() {
+        const MAX_STEP: u64 = 1000000;
+        let r = BigDecimal::from(LOW_R);
+        let initial_val = 12345 * 10u128.pow(24);
+        let mut val = initial_val;
+        let mut total_exponent = 0;
+        let mut rng = rand::thread_rng();
+        while total_exponent < N {
+            let exponent = std::cmp::min(N - total_exponent, rng.next_u64() % MAX_STEP + 1);
+            total_exponent += exponent;
+            let interest = r.pow(exponent);
+            val = interest.round_mul_u128(val);
+        }
+        almost_eq(val, initial_val * 2, 25);
+    }
 
     #[test]
     fn test_display() {
