@@ -1,6 +1,7 @@
 mod asset;
 mod big_decimal;
 mod external;
+mod linked_list;
 mod loan;
 mod oracle;
 mod util;
@@ -10,17 +11,20 @@ use crate::asset::{
     OracleCanonicalValuation,
 };
 use crate::external::{ext_price_oracle, PriceData};
+use crate::linked_list::LinkedList;
 use crate::loan::{Loan, LoanStatus};
 use crate::util::Fraction;
 
 use near_contract_standards::fungible_token::{core::ext_ft_core, receiver::FungibleTokenReceiver};
+use near_sdk::assert_one_yocto;
+use near_sdk::json_types::U64;
 use near_sdk::{
     borsh::{self, BorshDeserialize, BorshSerialize},
     env,
     json_types::U128,
     log, near_bindgen, require,
     serde::{Deserialize, Serialize},
-    store::{LookupSet, UnorderedMap},
+    store::{LookupMap, LookupSet, UnorderedMap, Vector},
     AccountId, Balance, BorshStorageKey, Gas, PanicOnDefault, Promise, PromiseOrValue,
 };
 
@@ -31,6 +35,18 @@ const MIN_COLLATERAL_RATIO: u128 = 120;
 const LOWER_COLLATERAL_RATIO: u128 = 105;
 pub const GAS_FOR_FT_TRANSFER: Gas = Gas(50_000_000_000_000);
 pub const SAFE_GAS: Balance = 50_000_000_000_000;
+
+#[derive(BorshSerialize, BorshStorageKey)]
+enum StorageKey {
+    Loans,
+    Lenders,
+    LendingPoolWithdrawalRequests,
+    LendingPoolInFlightWithdrawalRequests,
+    LendingPoolWithdrawalQueue,
+    LowerCollateralAccounts,
+}
+
+type UniqueId = u64;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(crate = "near_sdk::serde")]
@@ -43,10 +59,33 @@ pub struct LendingProtocolConfiguration {
     pub lower_collateral_accounts: Vec<AccountId>,
 }
 
+#[derive(BorshSerialize, BorshDeserialize, Default, Clone, Debug)]
+pub struct LenderEntry {
+    pub amount_in_lending_pool: LoanAssetBalance,
+    pub pending_withdrawal_requests: Vec<UniqueId>,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
+pub struct WithdrawalRequest {
+    account_id: AccountId,
+    amount: LoanAssetBalance,
+}
+
+impl WithdrawalRequest {
+    pub fn new(account_id: AccountId, amount: LoanAssetBalance) -> Self {
+        Self { account_id, amount }
+    }
+}
+
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct LendingProtocol {
+    pub unique_id: UniqueId,
     pub loans: UnorderedMap<AccountId, Loan>,
+    pub lenders: UnorderedMap<AccountId, LenderEntry>,
+    pub lending_pool_withdrawal_requests: LookupMap<UniqueId, WithdrawalRequest>,
+    pub lending_pool_in_flight_withdrawal_requests: LookupSet<UniqueId>,
+    pub lending_pool_withdrawal_queue: LinkedList<UniqueId>,
     pub lower_collateral_accounts: LookupSet<AccountId>,
     pub oracle_id: AccountId,
     pub collateral_asset: NativeAsset,
@@ -67,29 +106,49 @@ impl FungibleTokenReceiver for LendingProtocol {
         let token_contract_id = env::predecessor_account_id();
 
         if token_contract_id == self.loan_asset.contract_id {
-            // update loan information
-            let excess = self.repay(&sender_id, LoanAssetBalance(amount.0));
+            let amount = LoanAssetBalance(amount.0);
+            match &msg[..] {
+                "close" => {
+                    // Repay and close
+                    let excess = self.repay(&sender_id, amount);
 
-            // close loan if requested
-            if msg == "close" {
-                self.close();
+                    self.close();
+
+                    PromiseOrValue::Value(U128(*excess))
+                }
+                "lend" => {
+                    self.add_funds_to_lending_pool(sender_id, amount);
+
+                    // Add all of the funds to the lending pool
+                    PromiseOrValue::Value(U128(0))
+                }
+                _ => {
+                    // Repay by default
+                    let excess = self.repay(&sender_id, amount);
+
+                    PromiseOrValue::Value(U128(*excess))
+                }
             }
-
-            PromiseOrValue::Value(U128(*excess))
         } else {
             env::panic_str("Unknown token");
         }
     }
 }
 
-#[derive(BorshSerialize, BorshStorageKey)]
-enum StorageKey {
-    Loans,
-    LowerCollateralAccounts,
-}
-
 #[near_bindgen]
 impl LendingProtocol {
+    /* -----------------------------------------------------------------------------------
+    -------------------------------- PRIVATE HELPERS -------------------------------------
+    ----------------------------------------------------------------------------------- */
+
+    fn new_id(&mut self) -> UniqueId {
+        let id = self.unique_id;
+        self.unique_id = id
+            .checked_add(1)
+            .unwrap_or_else(|| env::panic_str("Overflow"));
+        id
+    }
+
     fn loan_valuation(&self, loan_amount: LoanAssetBalance) -> OracleCanonicalValuation {
         valuation(*loan_amount, &self.loan_asset.last_price.unwrap())
     }
@@ -103,6 +162,42 @@ impl LendingProtocol {
             &self.collateral_asset.last_price.unwrap(),
         )
     }
+
+    fn get_loan(&self, account_id: &AccountId) -> &Loan {
+        self.loans
+            .get(account_id)
+            .unwrap_or_else(|| env::panic_str("No collateral deposited"))
+    }
+
+    fn get_loan_status(&self, loan: &Loan) -> LoanStatus {
+        let borrowed_valuation = self.loan_valuation(loan.borrowed);
+        let collateral_valuation = self.collateral_valuation(loan.collateral);
+
+        let is_undercollateralized = borrowed_valuation
+            * loan.minimum_collateral_ratio.denominator.0
+            >= collateral_valuation * loan.minimum_collateral_ratio.numerator.0;
+
+        LoanStatus {
+            borrowed_amount: loan.borrowed,
+            borrowed_valuation,
+            collateral_amount: loan.collateral,
+            collateral_valuation,
+            minimum_collateral_ratio: loan.minimum_collateral_ratio,
+            is_undercollateralized,
+        }
+    }
+
+    fn add_funds_to_lending_pool(&mut self, lender_id: AccountId, amount: LoanAssetBalance) {
+        let lender_entry = self
+            .lenders
+            .entry(lender_id)
+            .or_insert_with(Default::default);
+        lender_entry.amount_in_lending_pool += amount;
+    }
+
+    /* -----------------------------------------------------------------------------------
+    ----------------------------- PUBLIC CHANGE METHODS ----------------------------------
+    ----------------------------------------------------------------------------------- */
 
     #[init]
     #[private]
@@ -119,7 +214,16 @@ impl LendingProtocol {
         }
 
         Self {
+            unique_id: 0,
             loans: UnorderedMap::new(StorageKey::Loans),
+            lenders: UnorderedMap::new(StorageKey::Lenders),
+            lending_pool_withdrawal_requests: LookupMap::new(
+                StorageKey::LendingPoolWithdrawalRequests,
+            ),
+            lending_pool_withdrawal_queue: LinkedList::new(StorageKey::LendingPoolWithdrawalQueue),
+            lending_pool_in_flight_withdrawal_requests: LookupSet::new(
+                StorageKey::LendingPoolInFlightWithdrawalRequests,
+            ),
             lower_collateral_accounts,
             oracle_id: config.oracle_contract_id,
             collateral_asset: NativeAsset::new(config.collateral_oracle_asset_id),
@@ -130,6 +234,101 @@ impl LendingProtocol {
             deposit_fee: config.deposit_fee,
             collateral_deposit_fee_pool: CollateralAssetBalance(0),
             liquidated_collateral_pool: CollateralAssetBalance(0),
+        }
+    }
+
+    #[payable]
+    pub fn request_withdrawal_from_lending_pool(&mut self, amount: U128) -> U64 {
+        assert_one_yocto();
+
+        let amount = LoanAssetBalance(amount.0);
+
+        let lender_id = env::predecessor_account_id();
+
+        let mut lender_entry = self
+            .lenders
+            .get(&lender_id)
+            .unwrap_or_else(|| env::panic_str("No funds in lending pool"))
+            .clone();
+
+        require!(
+            lender_entry.amount_in_lending_pool >= amount,
+            "Cannot withdraw more funds than deposited"
+        );
+
+        let withdrawal_request_id = self.new_id();
+
+        self.lending_pool_withdrawal_requests.insert(
+            withdrawal_request_id,
+            WithdrawalRequest::new(lender_id.clone(), amount),
+        );
+        self.lending_pool_withdrawal_queue
+            .enqueue(withdrawal_request_id);
+        lender_entry
+            .pending_withdrawal_requests
+            .push(withdrawal_request_id);
+        self.lenders.insert(lender_id.clone(), lender_entry);
+
+        U64(withdrawal_request_id)
+    }
+
+    #[payable]
+    pub fn process_next_withdrawal_request(&mut self) -> PromiseOrValue<()> {
+        assert_one_yocto();
+
+        let (request_id, request) = loop {
+            let request_id = match self.lending_pool_withdrawal_queue.dequeue() {
+                Some(id) => id,
+                None => return PromiseOrValue::Value(()), // Queue is empty (there may still be some in-flight requests)
+            };
+
+            if let Some(request) = self.lending_pool_withdrawal_requests.get(&request_id) {
+                break (request_id, request);
+            } else {
+                // Does not exist. Probably should never happen.
+            }
+        };
+
+        self.lending_pool_in_flight_withdrawal_requests
+            .insert(request_id);
+
+        // Don't bother with checking if we have the balance to perform this
+        // transfer. If we don't have sufficient balance of the loan asset, we
+        // recover in `on_withdraw_funds_from_lending_pool`.
+        ext_ft_core::ext(self.loan_asset.contract_id.clone())
+            .with_attached_deposit(1)
+            // TODO: Gas.
+            .ft_transfer(request.account_id.clone(), U128(*request.amount), None)
+            .then(
+                Self::ext(env::current_account_id())
+                    // TODO: Gas.
+                    .on_withdraw_funds_from_lending_pool(U64(request_id)),
+            )
+            .into()
+    }
+
+    #[private]
+    pub fn on_withdraw_funds_from_lending_pool(
+        &mut self,
+        request_id: U64,
+        #[callback_result] result: Result<(), near_sdk::PromiseError>,
+    ) {
+        let request_id = request_id.0;
+
+        self.lending_pool_in_flight_withdrawal_requests
+            .remove(&request_id);
+
+        if result.is_ok() {
+            self.lending_pool_withdrawal_requests.remove(&request_id);
+        } else {
+            // TODO: Fix exploit:
+            //  1. Lender A submits a withdrawal request for 100 tokens.
+            //  2. The contract currently only has 80 tokens available, so Lender A cannot successfully call `process_next_withdrawal_request` and receive their funds.
+            //  3. Lender B submits a withdrawal request for 80 tokens. It is queued behind Lender A's request.
+            //  4. Lender B calls `process_next_withdrawal_request` twice.
+            //  5. Lender A's withdrawal request fails, but Lender B's request succeeds, and empties the pool, even though Lender A was in line before Lender B.
+            // One way to resolve this is to maintain a total of "locked" (in-flight withdrawal requests) tokens *and* include a balance check before processing every withdrawal, or to simply track the balance of the pool locally, in this contract, instead of waiting for `ft_balance_of` queries to resolve...
+            self.lending_pool_withdrawal_queue.prepend(request_id);
         }
     }
 
@@ -353,7 +552,9 @@ impl LendingProtocol {
         ext_ft_core::ext(self.loan_asset.contract_id.clone())
             .with_static_gas(Gas(5_000_000_000_000))
             .with_attached_deposit(1)
+            // TODO: should this be `ft_transfer` or `ft_transfer_call`?
             .ft_transfer(
+                // TODO: handle transfer failure (lock in-flight assets)
                 account_id.clone(),
                 loan_amount.0.into(),
                 Some("Borrowed USDT".to_string()),
@@ -395,30 +596,6 @@ impl LendingProtocol {
     ------------------------------------ GETTERS -----------------------------------------
     ----------------------------------------------------------------------------------- */
 
-    fn get_loan(&self, account_id: &AccountId) -> &Loan {
-        self.loans
-            .get(account_id)
-            .unwrap_or_else(|| env::panic_str("No collateral deposited"))
-    }
-
-    fn get_loan_status(&self, loan: &Loan) -> LoanStatus {
-        let borrowed_valuation = self.loan_valuation(loan.borrowed);
-        let collateral_valuation = self.collateral_valuation(loan.collateral);
-
-        let is_undercollateralized = borrowed_valuation
-            * loan.minimum_collateral_ratio.denominator.0
-            >= collateral_valuation * loan.minimum_collateral_ratio.numerator.0;
-
-        LoanStatus {
-            borrowed_amount: loan.borrowed,
-            borrowed_valuation,
-            collateral_amount: loan.collateral,
-            collateral_valuation,
-            minimum_collateral_ratio: loan.minimum_collateral_ratio,
-            is_undercollateralized,
-        }
-    }
-
     pub fn get_total_max_borrowable_valuation_for_account(&self, account_id: &AccountId) -> U128 {
         U128(
             *self
@@ -436,10 +613,12 @@ impl LendingProtocol {
     }
 
     pub fn get_collateral_deposit_fee_pool(&self) -> U128 {
+        // TODO: Fee distribution.
         U128(*self.collateral_deposit_fee_pool)
     }
 
     pub fn get_liquidated_collateral_pool(&self) -> U128 {
+        // TODO: Sell liquidated collateral or distribute to lenders?
         U128(*self.liquidated_collateral_pool)
     }
 

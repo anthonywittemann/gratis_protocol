@@ -46,6 +46,7 @@ impl NativeAsset {
     }
 }
 
+/// Create a wrapper type to ensure that asset values don't get mixed up.
 macro_rules! asset_newtype {
     ($name: ident, $inner: ty) => {
         #[derive(
@@ -55,6 +56,7 @@ macro_rules! asset_newtype {
             Deserialize,
             Clone,
             Copy,
+            Default,
             Debug,
             PartialEq,
             Eq,
