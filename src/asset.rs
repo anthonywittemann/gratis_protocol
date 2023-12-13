@@ -1,5 +1,6 @@
 use std::{
     fmt::Display,
+    iter::Sum,
     ops::{Add, AddAssign, Deref, Div, DivAssign, Mul, MulAssign, Rem, RemAssign, Sub, SubAssign},
 };
 
@@ -83,6 +84,12 @@ macro_rules! asset_newtype {
         impl Display for $name {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(f, "{}", self.0)
+            }
+        }
+
+        impl Sum for $name {
+            fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+                iter.reduce(|a, b| a + b).unwrap_or_default()
             }
         }
 

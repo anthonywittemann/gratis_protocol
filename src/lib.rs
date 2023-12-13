@@ -24,7 +24,7 @@ use near_sdk::{
     json_types::U128,
     log, near_bindgen, require,
     serde::{Deserialize, Serialize},
-    store::{LookupMap, LookupSet, UnorderedMap, Vector},
+    store::{LookupMap, LookupSet, UnorderedMap},
     AccountId, Balance, BorshStorageKey, Gas, PanicOnDefault, Promise, PromiseOrValue,
 };
 
@@ -188,10 +188,7 @@ impl LendingProtocol {
     }
 
     fn add_funds_to_lending_pool(&mut self, lender_id: AccountId, amount: LoanAssetBalance) {
-        let lender_entry = self
-            .lenders
-            .entry(lender_id)
-            .or_insert_with(Default::default);
+        let lender_entry = self.lenders.entry(lender_id).or_default();
         lender_entry.amount_in_lending_pool += amount;
     }
 
@@ -620,6 +617,66 @@ impl LendingProtocol {
     pub fn get_liquidated_collateral_pool(&self) -> U128 {
         // TODO: Sell liquidated collateral or distribute to lenders?
         U128(*self.liquidated_collateral_pool)
+    }
+
+    pub fn get_withdrawal(&self, request_id: U64) -> Option<WithdrawalRequest> {
+        self.lending_pool_withdrawal_requests
+            .get(&request_id.0)
+            .cloned()
+    }
+
+    pub fn get_next_withdrawal_id(&self) -> Option<U64> {
+        self.lending_pool_withdrawal_queue.peek().map(U64)
+    }
+
+    pub fn get_withdrawal_queue_length(&self) -> u32 {
+        self.lending_pool_withdrawal_queue.len()
+    }
+
+    pub fn get_withdrawal_queue_depth(&self, request_id: Option<U64>) -> LoanAssetBalance {
+        let request_id = request_id.map(|id| id.0);
+        self.lending_pool_withdrawal_queue
+            .iter()
+            .take_while(|id| Some(*id) != request_id)
+            .map(|id| {
+                self.lending_pool_withdrawal_requests
+                    .get(&id)
+                    .unwrap()
+                    .amount
+            })
+            .sum()
+    }
+
+    pub fn get_position_in_withdrawal_queue(&self, request_id: U64) -> Option<u32> {
+        self.lending_pool_withdrawal_queue
+            .iter()
+            .position(|id| id == request_id.0)
+            .map(|pos| pos as u32)
+    }
+
+    pub fn get_withdrawal_queue_ids(&self, limit: Option<u32>) -> Vec<U64> {
+        let iter = self.lending_pool_withdrawal_queue.iter().map(U64);
+
+        if let Some(limit) = limit {
+            iter.take(limit as usize).collect()
+        } else {
+            iter.collect()
+        }
+    }
+
+    pub fn get_withdrawal_queue(&self, limit: Option<u32>) -> Vec<WithdrawalRequest> {
+        let iter = self.lending_pool_withdrawal_queue.iter().map(|id| {
+            self.lending_pool_withdrawal_requests
+                .get(&id)
+                .unwrap()
+                .clone()
+        });
+
+        if let Some(limit) = limit {
+            iter.take(limit as usize).collect()
+        } else {
+            iter.collect()
+        }
     }
 
     /* -----------------------------------------------------------------------------------
