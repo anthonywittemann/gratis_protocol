@@ -16,7 +16,8 @@ struct Item<T> {
     next: Option<u64>,
 }
 
-/// A data structure for queue-like operations.
+/// A data structure for queue operations in NEAR VM storage, implementing
+/// Borsh serialization.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct LinkedList<T: BorshSerialize> {
     _marker: PhantomData<T>,
@@ -37,7 +38,7 @@ impl<T: BorshSerialize> LinkedList<T> {
         }
     }
 
-    fn new_id(&mut self) -> u64 {
+    fn create_new_id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id = self
             .next_id
@@ -102,7 +103,7 @@ impl<T: BorshSerialize + BorshDeserialize> LinkedList<T> {
     }
 
     pub fn prepend(&mut self, value: T) {
-        let id = self.new_id();
+        let id = self.create_new_id();
         self.len += 1;
 
         let mut item = Item { value, next: None };
@@ -142,7 +143,7 @@ impl<T: BorshSerialize + BorshDeserialize> LinkedList<T> {
     }
 
     pub fn enqueue(&mut self, value: T) {
-        let id = self.new_id();
+        let id = self.create_new_id();
         self.len += 1;
 
         match self.ends {

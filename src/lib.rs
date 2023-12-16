@@ -80,7 +80,7 @@ impl WithdrawalRequest {
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct LendingProtocol {
-    pub unique_id: UniqueId,
+    pub next_unique_id: UniqueId,
     pub loans: UnorderedMap<AccountId, Loan>,
     pub lenders: UnorderedMap<AccountId, LenderEntry>,
     pub lending_pool_withdrawal_requests: LookupMap<UniqueId, WithdrawalRequest>,
@@ -141,9 +141,9 @@ impl LendingProtocol {
     -------------------------------- PRIVATE HELPERS -------------------------------------
     ----------------------------------------------------------------------------------- */
 
-    fn new_id(&mut self) -> UniqueId {
-        let id = self.unique_id;
-        self.unique_id = id
+    fn create_unique_id(&mut self) -> UniqueId {
+        let id = self.next_unique_id;
+        self.next_unique_id = id
             .checked_add(1)
             .unwrap_or_else(|| env::panic_str("Overflow"));
         id
@@ -211,7 +211,7 @@ impl LendingProtocol {
         }
 
         Self {
-            unique_id: 0,
+            next_unique_id: 0,
             loans: UnorderedMap::new(StorageKey::Loans),
             lenders: UnorderedMap::new(StorageKey::Lenders),
             lending_pool_withdrawal_requests: LookupMap::new(
@@ -253,7 +253,7 @@ impl LendingProtocol {
             "Cannot withdraw more funds than deposited"
         );
 
-        let withdrawal_request_id = self.new_id();
+        let withdrawal_request_id = self.create_unique_id();
 
         self.lending_pool_withdrawal_requests.insert(
             withdrawal_request_id,
